@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TalentMiner - 学术人物关系网络挖掘</title>
+<link rel="stylesheet" href="/style.css?v=3">
+</head>
+<body>
+<div class="app-container">
+  <header class="app-header">
+    <div class="header-left">
+      <h1>TalentMiner</h1>
+      <span class="subtitle">学术人物关系网络挖掘</span>
+    </div>
+    <div class="header-right">
+      <span id="status-indicator" class="status-idle">就绪</span>
+    </div>
+  </header>
+
+  <main class="main-content">
+    <aside class="sidebar">
+      <div class="panel input-panel">
+        <h2 class="panel-title">文献输入</h2>
+        <div class="tab-bar">
+          <button class="tab active" data-tab="pdf">上传 PDF</button>
+          <button class="tab" data-tab="doi">DOI 检索</button>
+          <button class="tab" data-tab="text">粘贴文本</button>
+        </div>
+
+        <div id="tab-pdf" class="tab-content active">
+          <div class="drop-zone" id="drop-zone">
+            <svg class="upload-icon" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p class="drop-text">拖拽 PDF 文件到此处</p>
+            <p class="drop-hint">或点击选择文件</p>
+            <input type="file" id="file-input" accept=".pdf" hidden>
+          </div>
+          <div id="upload-progress" class="progress-bar" style="display:none">
+            <div class="progress-fill"></div>
+          </div>
+        </div>
+
+        <div id="tab-doi" class="tab-content">
+          <div class="input-group">
+            <input type="text" id="doi-input" placeholder="输入 DOI，如 10.1038/nature12373" class="text-input">
+            <button id="doi-search-btn" class="btn btn-primary">检索</button>
+          </div>
+        </div>
+
+        <div id="tab-text" class="tab-content">
+          <textarea id="text-input" placeholder="粘贴包含作者姓名的文本段落..." class="text-area"></textarea>
+          <button id="text-analyze-btn" class="btn btn-primary">提取作者</button>
+        </div>
+
+        <div id="author-list-container" class="author-list-container" style="display:none">
+          <div class="author-list-header">
+            <h3>已识别作者 (<span id="author-count">0</span>)</h3>
+            <button id="toggle-all" class="btn btn-sm">全选/取消</button>
+          </div>
+          <div id="author-list" class="author-list"></div>
+          
+        </div>
+      </div>
+
+      <div class="panel" id="crawl-action-panel" style="display:none">
+        <button id="start-crawl-btn" class="btn btn-primary btn-full" disabled>
+          🔍 开始深度搜寻联系方式 (Google Scholar、ResearchGate、机构网站、arXiv...)
+        </button>
+        <p style="font-size:10px;color:var(--text-secondary);margin-top:4px;text-align:center">
+          从上方勾选目标作者，点击按钮开始全源搜索
+        </p>
+      </div>
+
+      <div id="progress-panel" class="panel progress-panel" style="display:none">
+        <h2 class="panel-title">爬取进度</h2>
+        <div class="progress-bar">
+          <div id="crawl-progress-fill" class="progress-fill" style="width:0%"></div>
+        </div>
+        <p id="progress-text" class="progress-text">准备中...</p>
+        <div id="crawl-log" class="crawl-log"></div>
+      </div>
+
+      <div id="network-stats" class="panel stats-panel" style="display:none">
+        <h2 class="panel-title">网络统计</h2>
+        <button id="download-csv-btn" class="btn btn-primary btn-full" style="display:none;margin-top:10px">📥 导出联系人 CSV</button>
+        <div id="stats-content"></div>
+      </div>
+
+      <div class="panel history-panel">
+        <div class="history-header">
+          <h2 class="panel-title">历史记录</h2>
+          <button id="refresh-history-btn" class="btn btn-sm">刷新</button>
+        </div>
+        <div id="history-list" class="history-list">
+          <span style="color:var(--text-secondary);font-size:11px">加载中...</span>
+        </div>
+      </div>
+
+    </aside>
+
+    <section class="graph-area">
+      <div class="graph-toolbar">
+        <div class="toolbar-group">
+          <button id="zoom-in-btn" class="tool-btn" title="放大">+</button>
+          <button id="zoom-out-btn" class="tool-btn" title="缩小">-</button>
+          <button id="zoom-fit-btn" class="tool-btn" title="适应窗口">⊡</button>
+        </div>
+        <div class="toolbar-group graph-search">
+          <select id="graph-search-type" class="graph-search-select" aria-label="搜索类型">
+            <option value="person">人物</option>
+            <option value="institution">大学 / 机构</option>
+          </select>
+          <input id="graph-search-input" class="graph-search-input" type="search"
+                 placeholder="输入人物姓名" autocomplete="off">
+          <button id="graph-search-btn" class="btn btn-sm btn-primary">搜索</button>
+          <button id="graph-search-clear" class="btn btn-sm" style="display:none">清除</button>
+          <label class="filter-label search-only-label">
+            <input type="checkbox" id="graph-search-only"> 仅显示匹配
+          </label>
+          <span id="graph-search-count" class="graph-search-count"></span>
+        </div>
+        <div class="toolbar-group">
+          <span class="legend-dot legend-core"></span> 目标作者
+          <span class="legend-dot legend-external"></span> 关联人物
+        </div>
+        <div class="toolbar-group">
+          <label class="filter-label">
+            <input type="checkbox" id="show-coauthor" checked> 合作
+          </label>
+          <label class="filter-label">
+            <input type="checkbox" id="show-affiliation" checked> 机构
+          </label>
+          <label class="filter-label">
+            <input type="checkbox" id="show-topic" checked> 领域
+          </label>
+        </div>
+      </div>
+
+      <div id="graph-container" class="graph-container">
+        <div class="empty-state" id="empty-state">
+          <svg viewBox="0 0 80 80" width="60" height="60" fill="none" stroke="currentColor" stroke-width="1.2">
+            <circle cx="20" cy="30" r="6"/>
+            <circle cx="60" cy="30" r="6"/>
+            <circle cx="40" cy="55" r="6"/>
+            <line x1="26" y1="30" x2="54" y2="30"/>
+            <line x1="30" y1="35" x2="42" y2="51"/>
+            <line x1="50" y1="34" x2="45" y2="50"/>
+          </svg>
+          <p>上传文献后开始挖掘关系网络</p>
+        </div>
+        <svg id="graph-svg"></svg>
+      </div>
+
+      <div id="detail-panel" class="detail-panel" style="display:none">
+        <button id="close-detail" class="close-btn">&times;</button>
+        <div id="detail-content"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="/d3.v7.min.js"></script>
+<script src="/app.js?v=3"></script>
+</body>
+</html>
