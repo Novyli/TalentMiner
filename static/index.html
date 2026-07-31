@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TalentMiner - 学术人物关系网络挖掘</title>
-<link rel="stylesheet" href="/style.css?v=3">
+<link rel="stylesheet" href="/style.css?v=5">
 </head>
 <body>
 <div class="app-container">
@@ -123,19 +123,27 @@
           </label>
           <span id="graph-search-count" class="graph-search-count"></span>
         </div>
-        <div class="toolbar-group">
+        <div class="toolbar-group node-legend" aria-label="人物节点图例">
+          <span class="legend-label">节点</span>
           <span class="legend-dot legend-core"></span> 目标作者
           <span class="legend-dot legend-external"></span> 关联人物
         </div>
-        <div class="toolbar-group">
-          <label class="filter-label">
-            <input type="checkbox" id="show-coauthor" checked> 合作
+        <div class="toolbar-group relation-legend" aria-label="关系连线图例">
+          <span class="legend-label">连线</span>
+          <label class="filter-label relation-legend-item" title="蓝色实线：OpenAlex 共同署名记录">
+            <input type="checkbox" id="show-coauthor" checked>
+            <span class="legend-line legend-line-coauthor"></span>
+            <span>合作</span>
           </label>
-          <label class="filter-label">
-            <input type="checkbox" id="show-affiliation" checked> 机构
+          <label class="filter-label relation-legend-item" title="绿色虚线：两人的机构信息相同">
+            <input type="checkbox" id="show-affiliation" checked>
+            <span class="legend-line legend-line-affiliation"></span>
+            <span>同机构</span>
           </label>
-          <label class="filter-label">
-            <input type="checkbox" id="show-topic" checked> 领域
+          <label class="filter-label relation-legend-item" title="橙色虚线：两人的研究领域相同">
+            <input type="checkbox" id="show-topic" checked>
+            <span class="legend-line legend-line-topic"></span>
+            <span>同领域</span>
           </label>
         </div>
       </div>
@@ -153,6 +161,8 @@
           <p>上传文献后开始挖掘关系网络</p>
         </div>
         <svg id="graph-svg"></svg>
+        <div id="graph-link-tooltip" class="graph-link-tooltip"
+             role="tooltip" aria-hidden="true"></div>
       </div>
 
       <div id="detail-panel" class="detail-panel" style="display:none">
@@ -164,6 +174,6 @@
 </div>
 
 <script src="/d3.v7.min.js"></script>
-<script src="/app.js?v=3"></script>
+<script src="/app.js?v=5"></script>
 </body>
 </html>

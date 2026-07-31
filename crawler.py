@@ -3,7 +3,9 @@
 import asyncio
 import re
 import unicodedata
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, asdict
+from difflib import SequenceMatcher
 from typing import Optional
 from urllib.parse import quote
 
@@ -30,6 +32,9 @@ class AuthorProfile:
     coauthors: list = field(default_factory=list)
     sources: list = field(default_factory=list)
     match_score: float = 0.0
+    match_status: str = "unmatched"
+    match_breakdown: dict = field(default_factory=dict)
+    candidates: list = field(default_factory=list)
 
     def to_dict(self):
         return asdict(self)
@@ -40,35 +45,144 @@ ORCID_BASE = "https://pub.orcid.org/v3.0"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 EMAIL_PATTERN = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b')
 BAD_EMAILS = {'noreply', 'no-reply', 'support', 'info', 'contact', 'admin', 'webmaster', 'help', 'sales', 'marketing'}
+NON_PERSONAL_EMAIL_TERMS = {
+    "committee", "committees", "collaboration", "collaborations",
+    "publication", "publications", "office", "secretariat", "team",
+    "mailinglist", "newsletter",
+}
 
 
-def _score_author_match(author: dict, context: dict) -> float:
-    if not context:
+INSTITUTION_STOPWORDS = {
+    "and", "the", "of", "for", "at", "in", "department", "faculty",
+    "school", "college", "university", "institute", "institution",
+    "laboratory", "laboratories", "lab", "center", "centre", "physics",
+    "science", "sciences", "research", "usa", "uk",
+}
+DISTINCT_INSTITUTION_TOKENS = {
+    "jila", "nist", "mit", "eth", "cuhk", "caltech", "stanford",
+    "harvard", "princeton", "berkeley",
+}
+INSTITUTION_ALIASES = {
+    "national institute of standards and technology": "nist",
+    "massachusetts institute of technology": "mit",
+    "eth zurich": "eth",
+    "swiss federal institute of technology zurich": "eth",
+    "chinese university of hong kong": "cuhk",
+    "california institute of technology": "caltech",
+}
+
+
+def _normalized_words(value: str) -> list[str]:
+    value = unicodedata.normalize("NFKD", value or "")
+    value = value.encode("ascii", "ignore").decode("ascii").lower()
+    value = value.replace("&", " and ")
+    for full_name, alias in INSTITUTION_ALIASES.items():
+        value = value.replace(full_name, alias)
+    return [
+        token for token in re.findall(r"[a-z0-9]+", value)
+        if token not in INSTITUTION_STOPWORDS and not token.isdigit()
+    ]
+
+
+def _institution_similarity(left: str, right: str) -> float:
+    """Compare institutions while ignoring address and department wording."""
+    left_words = _normalized_words(left)
+    right_words = _normalized_words(right)
+    if not left_words or not right_words:
         return 0.0
-    score = 0.0
-    affiliations = [(inst or {}).get("display_name", "").lower()
-                    for inst in (author.get("last_known_institutions") or [])]
-    all_aff_text = " ".join(affiliations)
-    for inst in (context.get("institutions") or []):
-        inst_lower = inst.lower()
-        for aff in affiliations:
-            if inst_lower in aff or aff in inst_lower:
-                score += 80
-                break
-        if inst_lower in all_aff_text:
-            score += 40
+    left_text, right_text = " ".join(left_words), " ".join(right_words)
+    if left_text == right_text:
+        return 1.0
+    if left_text in right_text or right_text in left_text:
+        return 1.0
+    left_set, right_set = set(left_words), set(right_words)
+    common = left_set & right_set
+    if not common:
+        return 0.0
+    containment = len(common) / min(len(left_set), len(right_set))
+    if len(common) == 1 and not (common & DISTINCT_INSTITUTION_TOKENS):
+        containment *= 0.45
+    sequence = SequenceMatcher(None, left_text, right_text).ratio()
+    return round(max(containment, sequence), 3)
+
+
+def _canonical_name(value: str) -> str:
+    value = unicodedata.normalize("NFKD", value or "")
+    value = value.encode("ascii", "ignore").decode("ascii").lower()
+    return "".join(re.findall(r"[a-z]+", value))
+
+
+def _score_author_match_details(author: dict, context: dict,
+                                original_name: str = "") -> tuple[float, dict]:
+    """Return a normalized identity score and an explainable breakdown."""
+    if not author:
+        return 0.0, {}
+
+    display_name = author.get("display_name") or ""
+    name_score = 0.0
+    if original_name and _name_match_ok(original_name, display_name):
+        name_score = 30.0 if _canonical_name(original_name) == _canonical_name(display_name) else 24.0
+
+    paper_institutions = context.get("institutions") or []
+    candidate_institutions = [
+        (inst or {}).get("display_name", "")
+        for inst in (author.get("last_known_institutions") or [])
+    ]
+    best_institution_match = max(
+        (
+            _institution_similarity(paper_inst, candidate_inst)
+            for paper_inst in paper_institutions
+            for candidate_inst in candidate_institutions
+        ),
+        default=0.0,
+    )
+    scope = context.get("institution_scope", "global")
+    institution_cap = 50.0 if scope == "author" else 15.0
+    if best_institution_match >= 0.85:
+        institution_score = institution_cap
+    elif best_institution_match >= 0.65:
+        institution_score = institution_cap * 0.72
+    elif best_institution_match >= 0.45:
+        institution_score = institution_cap * 0.4
+    else:
+        institution_score = 0.0
+
     topic_text = " ".join(
         (topic or {}).get("display_name", "").lower()
         for topic in (author.get("topics") or [])
     )
-    topic_hits = sum(
-        1 for kw in (context.get("keywords") or [])
-        if kw.lower() in topic_text
-    )
-    score += min(topic_hits * 5, 20)
-    score += min((author.get("cited_by_count") or 0) / 2000, 20)
-    score += min((author.get("works_count") or 0) / 50, 10)
-    return score
+    topic_hits = sorted({
+        keyword.lower() for keyword in (context.get("keywords") or [])
+        if keyword and re.search(
+            rf"(?<![a-z0-9]){re.escape(keyword.lower())}(?![a-z0-9])",
+            topic_text,
+        )
+    })
+    topic_score = min(len(topic_hits) * 3.0, 15.0)
+    score = round(min(100.0, name_score + institution_score + topic_score), 1)
+    return score, {
+        "name": round(name_score, 1),
+        "institution": round(institution_score, 1),
+        "institution_similarity": round(best_institution_match, 3),
+        "topic": round(topic_score, 1),
+        "topic_hits": topic_hits,
+        "institution_scope": scope,
+    }
+
+
+def _score_author_match(author: dict, context: dict,
+                        original_name: str = "") -> float:
+    return _score_author_match_details(author, context, original_name)[0]
+
+
+def _match_status(score: float, direct: bool = False) -> str:
+    if direct:
+        return "verified"
+    if score >= 75:
+        return "verified"
+    if score >= 50:
+        return "review"
+    return "insufficient"
 
 
 def _name_match_ok(original: str, found_display: str) -> bool:
@@ -210,9 +324,86 @@ def guess_institution_email(name: str, institution: str) -> Optional[str]:
         patterns = [f"{name_parts[0]}@{domain}"]
     return patterns[0] if patterns else None
 
+def _profile_from_openalex_result(result: dict, name: str, context: dict,
+                                  direct: bool = False) -> AuthorProfile:
+    score, breakdown = _score_author_match_details(result, context, name)
+    if direct:
+        score = 100.0
+        breakdown = {
+            "direct_work_authorship": 100.0,
+            "source": context.get("matched_work_source", "OpenAlex paper authorship"),
+        }
+    profile = AuthorProfile(
+        name=result.get("display_name") or name,
+        openalex_id=result.get("id") or "",
+        orcid=result.get("orcid") or "",
+        affiliations=[
+            (inst or {}).get("display_name", "")
+            for inst in (result.get("last_known_institutions") or [])
+            if (inst or {}).get("display_name")
+        ],
+        topics=[
+            (topic or {}).get("display_name", "")
+            for topic in (result.get("topics") or [])[:5]
+            if (topic or {}).get("display_name")
+        ],
+        cited_by_count=result.get("cited_by_count") or 0,
+        works_count=result.get("works_count") or 0,
+        match_score=score,
+        match_status=_match_status(score, direct=direct),
+        match_breakdown=breakdown,
+    )
+    profile.sources.append(
+        f"OpenAlex: {profile.works_count} works, {profile.cited_by_count} citations, "
+        f"score={profile.match_score} | https://openalex.org/{profile.openalex_id.split('/')[-1]}"
+    )
+    return profile
+
+
+def _candidate_summary(profile: AuthorProfile) -> dict:
+    return {
+        "name": profile.name,
+        "openalex_id": profile.openalex_id or "",
+        "url": (
+            f"https://openalex.org/{profile.openalex_id.split('/')[-1]}"
+            if profile.openalex_id else ""
+        ),
+        "score": profile.match_score,
+        "status": profile.match_status,
+        "affiliations": profile.affiliations,
+        "match_breakdown": profile.match_breakdown,
+        "works_count": profile.works_count,
+        "cited_by_count": profile.cited_by_count,
+    }
+
+
+async def fetch_openalex_author(openalex_id: str, name: str,
+                                session: aiohttp.ClientSession,
+                                context: Optional[dict] = None) -> Optional[AuthorProfile]:
+    author_id = (openalex_id or "").rstrip("/").split("/")[-1]
+    if not author_id:
+        return None
+    try:
+        async with session.get(
+            f"{OPENALEX_BASE}/authors/{author_id}",
+            headers={"User-Agent": USER_AGENT},
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status != 200:
+                return None
+            result = await resp.json()
+            return _profile_from_openalex_result(
+                result, name, context or {}, direct=True
+            )
+    except Exception as exc:
+        print(f"OpenAlex direct author lookup failed for '{name}': {exc}")
+        return None
+
+
 async def search_openalex_authors(name: str, session: aiohttp.ClientSession,
                                    context: Optional[dict] = None) -> list[AuthorProfile]:
     profiles = []
+    context = context or {}
     url = f"{OPENALEX_BASE}/authors?search={quote(name)}&per_page=10"
     try:
         async with session.get(url, headers={"User-Agent": USER_AGENT},
@@ -227,25 +418,16 @@ async def search_openalex_authors(name: str, session: aiohttp.ClientSession,
                 display_name = result.get("display_name") or ""
                 if not _name_match_ok(name, display_name):
                     continue  # Skip if names don't match at all
-                profile = AuthorProfile(
-                    name=display_name,
-                    openalex_id=result.get("id") or "",
-                    orcid=result.get("orcid") or "",
-                    affiliations=[(inst or {}).get("display_name", "")
-                                  for inst in (result.get("last_known_institutions") or [])],
-                    topics=[(t or {}).get("display_name", "")
-                            for t in (result.get("topics") or [])[:5]],
-                    cited_by_count=result.get("cited_by_count") or 0,
-                    works_count=result.get("works_count") or 0,
-                    match_score=round(_score_author_match(result, context), 1),
+                profile = _profile_from_openalex_result(
+                    result, name, context, direct=False
                 )
-                profile.sources.append(
-                    f"OpenAlex: {profile.works_count} works, {profile.cited_by_count} citations, "
-                    f"score={profile.match_score} | https://openalex.org/{result.get('id','').split('/')[-1]}"
-                )
-                scored.append((profile.match_score, profile))
-            scored.sort(key=lambda x: x[0], reverse=True)
-            profiles = [p for _, p in scored]
+                scored.append((
+                    profile.match_score,
+                    profile.cited_by_count,
+                    profile,
+                ))
+            scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            profiles = [profile for _, _, profile in scored]
     except Exception as e:
         print(f"OpenAlex failed for '{name}': {e}")
     return profiles
@@ -453,8 +635,14 @@ async def search_social_deep(name: str, session: aiohttp.ClientSession) -> dict:
 
 async def search_arxiv_for_email(name: str, institution: str,
                                   session: aiohttp.ClientSession) -> dict:
-    """Search arXiv for papers by this author to extract email from metadata."""
-    result = {"email": None, "source": None, "papers_found": 0}
+    """Search arXiv, accepting only email addresses attributable to the author."""
+    result = {
+        "email": None,
+        "source": None,
+        "papers_found": 0,
+        "matched_papers": 0,
+        "rejected_candidates": 0,
+    }
     try:
         # Search arXiv API
         query = quote(f'au:"{name}" AND all:"{institution}"')
@@ -462,23 +650,85 @@ async def search_arxiv_for_email(name: str, institution: str,
         text = await _safe_get(url, session, timeout=15)
         if not text:
             return result
-        result["papers_found"] = text.count("<entry>")
+        parsed = _extract_arxiv_email_from_feed(text, name)
+        result.update(parsed)
         if result["papers_found"] == 0:
             # Try broader search: just the name
             url2 = f"http://export.arxiv.org/api/query?search_query=au:{quote(name)}&max_results=5"
             text = await _safe_get(url2, session, timeout=15)
             if text:
-                result["papers_found"] = text.count("<entry>")
-        # Extract emails from the XML response
-        emails = EMAIL_PATTERN.findall(text or "")
-        for e in emails:
-            prefix = e.split("@")[0].lower()
-            if not any(bad in prefix for bad in BAD_EMAILS):
-                result["email"] = e
-                result["source"] = f"arXiv paper metadata"
-                break
+                result.update(_extract_arxiv_email_from_feed(text, name))
     except Exception:
         pass
+    return result
+
+
+def _email_localpart_matches_author(email: str, name: str) -> bool:
+    """Conservatively require an arXiv email local-part to identify the author."""
+    local_part = email.split("@", 1)[0].lower()
+    compact_local = "".join(re.findall(r"[a-z]+", local_part))
+    if not compact_local:
+        return False
+    if any(term in compact_local for term in NON_PERSONAL_EMAIL_TERMS):
+        return False
+    if any(bad.replace("-", "") in compact_local for bad in BAD_EMAILS):
+        return False
+
+    name_parts = re.findall(
+        r"[a-z]+",
+        unicodedata.normalize("NFKD", name or "")
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .lower(),
+    )
+    if not name_parts:
+        return False
+
+    # Requiring the family name deliberately favors a missing email over
+    # assigning another author's or a collaboration's address.
+    family_name = name_parts[-1]
+    return len(family_name) >= 2 and family_name in compact_local
+
+
+def _extract_arxiv_email_from_feed(text: str, name: str) -> dict:
+    """Parse Atom entries separately and keep only author-attributable emails."""
+    result = {
+        "email": None,
+        "source": None,
+        "papers_found": 0,
+        "matched_papers": 0,
+        "rejected_candidates": 0,
+    }
+    if not text:
+        return result
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return result
+
+    atom = "{http://www.w3.org/2005/Atom}"
+    entries = root.findall(f"{atom}entry")
+    result["papers_found"] = len(entries)
+    for entry in entries:
+        author_names = [
+            (author.findtext(f"{atom}name") or "").strip()
+            for author in entry.findall(f"{atom}author")
+        ]
+        if not any(_name_match_ok(name, author_name) for author_name in author_names):
+            continue
+        result["matched_papers"] += 1
+
+        entry_text = " ".join(entry.itertext())
+        for email in dict.fromkeys(EMAIL_PATTERN.findall(entry_text)):
+            if not _email_localpart_matches_author(email, name):
+                result["rejected_candidates"] += 1
+                continue
+            result["email"] = email
+            entry_id = (entry.findtext(f"{atom}id") or "").strip()
+            result["source"] = (
+                f"arXiv paper: {entry_id}" if entry_id else "arXiv paper metadata"
+            )
+            return result
     return result
 
 
@@ -571,27 +821,69 @@ async def crawl_author_full(name: str, context: Optional[dict] = None) -> Author
     context = context or {}
     connector = aiohttp.TCPConnector(limit=10)
     async with aiohttp.ClientSession(connector=connector) as session:
-        # Level 1: OpenAlex - skip low confidence matches
+        # Level 1: Prefer the author ID attached to the resolved paper.
         author_context = dict(context)
         specific_institutions = (
             context.get("author_institutions_map") or {}
         ).get(name)
         if specific_institutions:
             author_context["institutions"] = specific_institutions
-        oa_results = await search_openalex_authors(name, session, author_context)
+            author_context["institution_scope"] = "author"
+        else:
+            author_context["institution_scope"] = "global"
+
+        direct_identity = (
+            context.get("openalex_authors_map") or {}
+        ).get(name)
         profile = AuthorProfile(name=name)
-        has_paper_institutions = bool(author_context.get("institutions"))
-        minimum_match_score = 80 if has_paper_institutions else 20
-        if oa_results and oa_results[0].match_score >= minimum_match_score:
-            profile = oa_results[0]
-        elif oa_results:
-            # Keep the paper identity rather than adopting a same-name person
-            # whose institution does not match the uploaded publication.
-            profile.sources.append(
-                f"OpenAlex candidates rejected: best score="
-                f"{oa_results[0].match_score} (< {minimum_match_score}); "
-                "paper name preserved without unverified profile enrichment."
+        oa_results = []
+        if direct_identity and direct_identity.get("openalex_id"):
+            profile = await fetch_openalex_author(
+                direct_identity["openalex_id"], name, session, author_context
+            ) or AuthorProfile(
+                name=name,
+                openalex_id=direct_identity.get("openalex_id"),
+                orcid=direct_identity.get("orcid"),
+                affiliations=direct_identity.get("affiliations") or [],
+                match_score=100.0,
+                match_status="verified",
+                match_breakdown={
+                    "direct_work_authorship": 100.0,
+                    "source": direct_identity.get("source", "OpenAlex paper authorship"),
+                },
             )
+            profile.sources.append(
+                "Identity verified from the matched paper authorship: "
+                f"{direct_identity.get('source', 'OpenAlex')}"
+            )
+            profile.candidates = [_candidate_summary(profile)]
+        else:
+            oa_results = await search_openalex_authors(
+                name, session, author_context
+            )
+            candidate_summaries = [
+                _candidate_summary(candidate) for candidate in oa_results[:3]
+            ]
+            if oa_results and oa_results[0].match_status == "verified":
+                profile = oa_results[0]
+                profile.candidates = candidate_summaries
+            elif oa_results:
+                best = oa_results[0]
+                profile.match_score = best.match_score
+                profile.match_status = best.match_status
+                profile.match_breakdown = best.match_breakdown
+                profile.candidates = candidate_summaries
+                profile.sources.append(
+                    "OpenAlex candidate not automatically adopted: "
+                    f"best score={best.match_score}, status={best.match_status}. "
+                    "Paper identity preserved for review."
+                )
+            else:
+                profile.match_status = "not-found"
+                profile.sources.append(
+                    "No name-compatible OpenAlex candidate was found."
+                )
+
         # Preserve the exact name supplied by the paper. External databases
         # may add aliases or return a differently formatted display name.
         profile.name = name
@@ -606,43 +898,46 @@ async def crawl_author_full(name: str, context: Optional[dict] = None) -> Author
             profile.email_source = "Uploaded paper PDF"
             profile.sources.append(f"Email printed in uploaded paper: {paper_email}")
 
-        # Level 2-5: Run in parallel
-        scholar_task = search_scholar_deep(name, session)
-        rg_task = search_researchgate_deep(name, session)
-        social_task = search_social_deep(name, session)
+        identity_verified = profile.match_status == "verified"
+        if identity_verified:
+            # Only enrich external profiles after identity verification.
+            scholar_task = search_scholar_deep(name, session)
+            rg_task = search_researchgate_deep(name, session)
+            social_task = search_social_deep(name, session)
+            scholar, rg, social = await asyncio.gather(
+                scholar_task, rg_task, social_task
+            )
 
-        scholar, rg, social = await asyncio.gather(
-            scholar_task, rg_task, social_task
-        )
+            if scholar.get("url"):
+                profile.google_scholar_url = scholar["url"]
+                profile.sources.append(f"Google Scholar: {scholar['url']}")
+            if scholar.get("email") and not profile.email:
+                profile.email = scholar["email"]
+                profile.email_source = scholar.get("source", "Google Scholar")
+                profile.sources.append(f"Email from: {profile.email_source}")
 
-        # Process Google Scholar results
-        if scholar.get("url"):
-            profile.google_scholar_url = scholar["url"]
-            profile.sources.append(f"Google Scholar: {scholar['url']}")
-        if scholar.get("email") and not profile.email:
-            profile.email = scholar["email"]
-            profile.email_source = scholar.get("source", "Google Scholar")
-            profile.sources.append(f"Email from: {profile.email_source}")
+            if rg.get("url"):
+                profile.researchgate_url = rg["url"]
+                profile.sources.append(f"ResearchGate: {rg['url']}")
+            if rg.get("email") and not profile.email:
+                profile.email = rg["email"]
+                profile.email_source = "ResearchGate profile"
+                profile.sources.append(f"Email from ResearchGate: {rg['url']}")
 
-        # Process ResearchGate
-        if rg.get("url"):
-            profile.researchgate_url = rg["url"]
-            profile.sources.append(f"ResearchGate: {rg['url']}")
-        if rg.get("email") and not profile.email:
-            profile.email = rg["email"]
-            profile.email_source = "ResearchGate profile"
-            profile.sources.append(f"Email from ResearchGate: {rg['url']}")
-
-        # Process social
-        profile.twitter_url = social.get("twitter_url")
-        profile.linkedin_url = social.get("linkedin_url")
-        if profile.twitter_url:
-            profile.sources.append(f"Twitter/X: {profile.twitter_url}")
-        if profile.linkedin_url:
-            profile.sources.append(f"LinkedIn: {profile.linkedin_url}")
+            profile.twitter_url = social.get("twitter_url")
+            profile.linkedin_url = social.get("linkedin_url")
+            if profile.twitter_url:
+                profile.sources.append(f"Twitter/X: {profile.twitter_url}")
+            if profile.linkedin_url:
+                profile.sources.append(f"LinkedIn: {profile.linkedin_url}")
+        else:
+            profile.sources.append(
+                "External profile searches skipped until an OpenAlex identity "
+                "candidate is confirmed."
+            )
 
         # Level 4 (only if no email yet): University contact search
-        if not profile.email and profile.affiliations:
+        if identity_verified and not profile.email and profile.affiliations:
             aff = profile.affiliations[0]
             uni_result = await search_university_contact(name, aff, session)
             if uni_result.get("email"):
@@ -654,7 +949,7 @@ async def crawl_author_full(name: str, context: Optional[dict] = None) -> Author
                 profile.sources.append(f"Web: {uni_result['url']}")
 
         # Level 6: Real email verification (arXiv, homepage, directory)
-        if not profile.email:
+        if identity_verified and not profile.email:
             # Determine best institution: name_match > context > affiliations
             name_inst_map = context.get("name_institution_map") or {}
             inst_for_search = name_inst_map.get(name)
@@ -698,7 +993,7 @@ async def crawl_author_full(name: str, context: Optional[dict] = None) -> Author
                 # A missing email is safer than an invented address.
 
         # Level 7: ORCID email (if still no email)
-        if not profile.email and profile.orcid:
+        if identity_verified and not profile.email and profile.orcid:
             orcid_email = await extract_email_from_orcid(profile.orcid, session)
             if orcid_email:
                 profile.email = orcid_email
@@ -706,7 +1001,7 @@ async def crawl_author_full(name: str, context: Optional[dict] = None) -> Author
                 profile.sources.append(f"Email from ORCID: {profile.orcid}")
 
         # Get co-authors
-        if profile.openalex_id:
+        if identity_verified and profile.openalex_id:
             coauthors = await search_openalex_coauthors(profile.openalex_id, session)
             profile.coauthors = coauthors
             profile.sources.append(f"Co-authors: {len(coauthors)} via OpenAlex")

@@ -11,6 +11,27 @@ const state = {
 };
 const svg = d3.select('#graph-svg');
 const container = document.getElementById('graph-container');
+const linkTooltip = document.getElementById('graph-link-tooltip');
+const RELATION_META = {
+  'co-author': {
+    label: '合作关系',
+    description: 'OpenAlex 记录显示两人曾共同署名论文',
+    color: '#6c8cff',
+    order: 0
+  },
+  'same-affiliation': {
+    label: '同机构',
+    description: '两人的机构信息中存在相同机构',
+    color: '#4ade80',
+    order: 1
+  },
+  'shared-topic': {
+    label: '同领域',
+    description: '两人的研究领域中存在相同主题',
+    color: '#fb923c',
+    order: 2
+  }
+};
 let zoom, g;
 
 function initSVG() {
@@ -191,15 +212,129 @@ async function buildAndRenderGraph(projectId = state.taskId) {
 function renderStats(stats) {
   document.getElementById('stats-content').innerHTML = `
     <div class="stat-row"><span>节点</span><span class="val">${stats.node_count || 0}</span></div>
-    <div class="stat-row"><span>边</span><span class="val">${stats.edge_count || 0}</span></div>
+    <div class="stat-row"><span>关系</span><span class="val">${stats.edge_count || 0}</span></div>
+    <div class="stat-row"><span>人物对</span><span class="val">${stats.pair_count ?? stats.edge_count ?? 0}</span></div>
     <div class="stat-row"><span>密度</span><span class="val">${stats.density || 0}</span></div>
     <div class="stat-row"><span>平均度</span><span class="val">${stats.avg_degree || 0}</span></div>
     <div class="stat-row"><span>最大度</span><span class="val">${stats.max_degree || 0}</span></div>
   `;
 }
 
+function endpointId(value) {
+  return typeof value === 'object' ? value.id : value;
+}
+
+function assignParallelOffsets(links) {
+  const groups = new Map();
+  links.forEach(link => {
+    link._sourceId = endpointId(link.source);
+    link._targetId = endpointId(link.target);
+    const key = [link._sourceId, link._targetId].sort().join('\u0000');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(link);
+  });
+  groups.forEach(group => {
+    group.sort((a, b) =>
+      (RELATION_META[a.relation]?.order ?? 99) -
+      (RELATION_META[b.relation]?.order ?? 99));
+    group.forEach((link, index) => {
+      const centeredIndex = index - (group.length - 1) / 2;
+      const direction = link._sourceId.localeCompare(link._targetId) <= 0 ? 1 : -1;
+      link._curveOffset = centeredIndex * 14 * direction;
+    });
+  });
+}
+
+function graphLinkPath(link) {
+  const sx = link.source.x, sy = link.source.y;
+  const tx = link.target.x, ty = link.target.y;
+  const dx = tx - sx, dy = ty - sy;
+  const length = Math.sqrt(dx * dx + dy * dy) || 1;
+  const offset = link._curveOffset || 0;
+  if (Math.abs(offset) < 0.1) return `M${sx},${sy} L${tx},${ty}`;
+  const mx = (sx + tx) / 2 - dy / length * offset;
+  const my = (sy + ty) / 2 + dx / length * offset;
+  return `M${sx},${sy} Q${mx},${my} ${tx},${ty}`;
+}
+
+function positionLinkTooltip(event) {
+  if (!linkTooltip) return;
+  const rect = container.getBoundingClientRect();
+  const maxLeft = Math.max(8, rect.width - linkTooltip.offsetWidth - 8);
+  const maxTop = Math.max(8, rect.height - linkTooltip.offsetHeight - 8);
+  linkTooltip.style.left = `${Math.max(8, Math.min(event.clientX - rect.left + 14, maxLeft))}px`;
+  linkTooltip.style.top = `${Math.max(8, Math.min(event.clientY - rect.top + 14, maxTop))}px`;
+}
+
+function localizedLinkEvidence(link) {
+  const evidenceItems = (link.evidence_items || []).filter(Boolean);
+  if (evidenceItems.length) return evidenceItems.join('；');
+  const evidence = link.evidence || '';
+  if (evidence.startsWith('Both affiliated with: ')) {
+    return `共同机构：${evidence.slice('Both affiliated with: '.length)}`;
+  }
+  if (evidence.startsWith('Both work on: ')) {
+    return `共同研究领域：${evidence.slice('Both work on: '.length)}`;
+  }
+  if (evidence === 'Co-authorship found via OpenAlex') {
+    return 'OpenAlex 共同署名记录';
+  }
+  return evidence;
+}
+
+function showLinkTooltip(event, link) {
+  if (!linkTooltip) return;
+  const meta = RELATION_META[link.relation] || {
+    label: '其他关系',
+    description: '系统记录的其他人物关系',
+    color: '#9ca3af'
+  };
+  const evidence = localizedLinkEvidence(link);
+  linkTooltip.replaceChildren();
+  const title = document.createElement('div');
+  title.className = 'tooltip-title';
+  title.textContent = `${link.source.name || link._sourceId} ↔ ${link.target.name || link._targetId}`;
+  const relation = document.createElement('div');
+  relation.className = 'tooltip-relation';
+  relation.style.color = meta.color;
+  relation.textContent = meta.label;
+  const description = document.createElement('div');
+  description.className = 'tooltip-description';
+  description.textContent = meta.description;
+  linkTooltip.append(title, relation, description);
+  if (evidence) {
+    const evidenceEl = document.createElement('div');
+    evidenceEl.className = 'tooltip-evidence';
+    evidenceEl.textContent = evidence;
+    linkTooltip.append(evidenceEl);
+  }
+  linkTooltip.style.display = 'block';
+  linkTooltip.setAttribute('aria-hidden', 'false');
+  positionLinkTooltip(event);
+}
+
+function linkTooltipText(link) {
+  const meta = RELATION_META[link.relation] || {
+    label: '其他关系',
+    description: '系统记录的其他人物关系'
+  };
+  const evidence = localizedLinkEvidence(link);
+  return [
+    `${link.source.name || link._sourceId} ↔ ${link.target.name || link._targetId}`,
+    meta.label,
+    evidence || meta.description
+  ].join('\n');
+}
+
+function hideLinkTooltip() {
+  if (!linkTooltip) return;
+  linkTooltip.style.display = 'none';
+  linkTooltip.setAttribute('aria-hidden', 'true');
+}
+
 function renderGraph(data) {
   const w = container.clientWidth, h = container.clientHeight;
+  hideLinkTooltip();
   g.selectAll('*').remove();
 
   // D3 mutates link.source/link.target into node objects. Always work on
@@ -222,7 +357,6 @@ function renderGraph(data) {
   const searchQuery = (state.graphSearch.query || '').trim().toLocaleLowerCase();
   const hasSearch = searchQuery.length > 0;
   const matchedIds = new Set();
-  const endpointId = value => typeof value === 'object' ? value.id : value;
   if (hasSearch) {
     nodeData.forEach(n => {
       const isMatch = state.graphSearch.type === 'institution'
@@ -242,6 +376,7 @@ function renderGraph(data) {
   const visibleIds = new Set(nodeData.map(n => n.id));
   linkData = linkData.filter(e =>
     visibleIds.has(e.source) && visibleIds.has(e.target));
+  assignParallelOffsets(linkData);
 
   if (hasSearch) {
     let matchIndex = 0;
@@ -270,16 +405,33 @@ function renderGraph(data) {
       .force('search-y', d3.forceY(h / 2).strength(d => matchedIds.has(d.id) ? 0.65 : 0.01));
   }
 
-  const link = g.append('g').selectAll('line').data(linkData).join('line')
+  const linkGroup = g.append('g').selectAll('g').data(linkData).join('g')
     .attr('class', d => {
-      if (!hasSearch || state.graphSearch.onlyMatches) return 'graph-link';
+      if (!hasSearch || state.graphSearch.onlyMatches) return 'graph-link-group';
       return matchedIds.has(endpointId(d.source)) || matchedIds.has(endpointId(d.target))
-        ? 'graph-link search-related'
-        : 'graph-link search-dim';
+        ? 'graph-link-group search-related'
+        : 'graph-link-group search-dim';
     })
-    .attr('stroke', d => { const rels = { 'co-author': '#6c8cff', 'same-affiliation': '#4ade80', 'shared-topic': '#fb923c' }; return rels[d.relation] || '#555'; })
+    .attr('data-relation', d => d.relation);
+
+  const link = linkGroup.append('path')
+    .attr('class', 'graph-link')
+    .attr('stroke', d => RELATION_META[d.relation]?.color || '#555')
     .attr('stroke-width', d => Math.max(0.5, Math.min(3, d.weight * 1.5)))
     .attr('stroke-dasharray', d => d.relation === 'co-author' ? 'none' : '3,3');
+
+  const linkHit = linkGroup.append('path')
+    .attr('class', 'graph-link-hit')
+    .on('pointerenter', function(event, d) {
+      d3.select(this.parentNode).select('.graph-link').classed('is-hovered', true);
+      showLinkTooltip(event, d);
+    })
+    .on('pointermove', positionLinkTooltip)
+    .on('pointerleave', function() {
+      d3.select(this.parentNode).select('.graph-link').classed('is-hovered', false);
+      hideLinkTooltip();
+    });
+  linkHit.append('title').text(linkTooltipText);
 
   const node = g.append('g').selectAll('g').data(nodeData).join('g')
     .attr('class', d => {
@@ -304,17 +456,36 @@ function renderGraph(data) {
     .attr('dx', d => d.group === 0 ? 12 : 8).attr('dy', 4);
 
   sim.on('tick', () => {
-    link.attr('x1', d => d.source.x).attr('y1', d => d.source.y).attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+    link.attr('d', graphLinkPath);
+    linkHit.attr('d', graphLinkPath);
     node.attr('transform', d => `translate(${d.x},${d.y})`);
   });
 
   document.getElementById('empty-state').style.display = 'none';
 }
 
+function escapeHTML(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[char]);
+}
+
+function identityStatusMeta(d) {
+  const status = d.match_status || 'unmatched';
+  if (status === 'verified') return {label: '已确认', cls: 'verified'};
+  if (status === 'review') return {label: '待人工确认', cls: 'review'};
+  if (status === 'insufficient') return {label: '证据不足', cls: 'insufficient'};
+  if (status === 'not-found') return {label: '未找到候选', cls: 'not-found'};
+  if ((d.match_score || 0) > 30) return {label: '历史高分', cls: 'review'};
+  if ((d.match_score || 0) > 0) return {label: '历史候选', cls: 'insufficient'};
+  return {label: '未验证', cls: 'not-found'};
+}
+
 function showDetail(d) {
   state.selectedAuthor = d;
   var panel = document.getElementById('detail-panel');
   var content = document.getElementById('detail-content');
+  var statusMeta = identityStatusMeta(d);
   var socialHTML = [
     { label: 'Google Scholar', url: d.google_scholar_url },
     { label: 'ResearchGate', url: d.researchgate_url },
@@ -325,14 +496,41 @@ function showDetail(d) {
   }).join('');
   var topicsHTML = (d.topics || []).map(function(t) { return '<span class="tag">' + t + '</span>'; }).join('') || '<span style="color:var(--text-secondary);font-size:11px">无数据</span>';
   var affHTML = (d.affiliations || []).map(function(a) { return '<span class="tag">' + a + '</span>'; }).join('') || '<span style="color:var(--text-secondary);font-size:11px">无数据</span>';
-  var matchBadge = d.match_score > 30 ? '<span style="color:#4ade80;font-size:10px;margin-left:4px">高置信度</span>' : d.match_score > 10 ? '<span style="color:#fb923c;font-size:10px;margin-left:4px">中置信度</span>' : d.match_score > 0 ? '<span style="color:#ef4444;font-size:10px;margin-left:4px">低置信度</span>' : '';
+  var matchBadge = '<span class="identity-badge identity-' + statusMeta.cls + '">' +
+    statusMeta.label + (d.match_score ? ' · ' + Number(d.match_score).toFixed(1) + '分' : '') +
+    '</span>';
+  var breakdown = d.match_breakdown || {};
+  var breakdownRows = [
+    ['姓名', breakdown.name],
+    ['机构', breakdown.institution],
+    ['研究领域', breakdown.topic],
+    ['论文直接确认', breakdown.direct_work_authorship]
+  ].filter(function(row) { return row[1] !== undefined && row[1] !== null; });
+  var breakdownHTML = breakdownRows.length
+    ? breakdownRows.map(function(row) {
+        return '<div class="score-row"><span>' + row[0] + '</span><strong>' +
+          escapeHTML(row[1]) + '</strong></div>';
+      }).join('')
+    : '<span class="detail-muted">暂无评分明细</span>';
+  var candidatesHTML = (d.candidates || []).map(function(candidate) {
+    var url = /^https?:\/\//.test(candidate.url || '') ? candidate.url : '#';
+    var institutions = (candidate.affiliations || []).slice(0, 2).join('；') || '机构未知';
+    return '<div class="candidate-card">' +
+      '<div class="candidate-head"><a href="' + escapeHTML(url) +
+      '" target="_blank" rel="noopener">' + escapeHTML(candidate.name || 'OpenAlex 候选') +
+      '</a><strong>' + escapeHTML(candidate.score ?? 0) + '分</strong></div>' +
+      '<div class="candidate-affiliation">' + escapeHTML(institutions) + '</div>' +
+      '</div>';
+  }).join('') || '<span class="detail-muted">没有可展示的 OpenAlex 候选</span>';
   var emailHTML = d.email ? '<div style="font-size:13px;color:#4ade80;margin-bottom:4px">' + d.email + '</div><div style="font-size:10px;color:var(--text-secondary)">来源: ' + (d.email_source || '未知') + '</div>' : '<span style="color:var(--text-secondary);font-size:11px">未找到邮箱</span>';
   var evidenceHTML = (d.sources || []).map(function(s) {
     var m = s.match(/(https?:\/\/[^\s]+)/);
     if (m) return '<div style="font-size:10px">' + s.substring(0, s.indexOf(m[0])) + '<a href="' + m[0] + '" target="_blank" style="color:var(--accent);word-break:break-all">' + m[0] + '</a></div>';
     return '<div style="font-size:10px;color:var(--text-secondary);word-break:break-all">' + s + '</div>';
   }).join('') || '<span style="color:var(--text-secondary);font-size:11px">无数据</span>';
-  content.innerHTML = '<div class="detail-name">' + d.name + matchBadge + '</div>' +
+  content.innerHTML = '<div class="detail-name">' + escapeHTML(d.name) + matchBadge + '</div>' +
+    '<div class="detail-section"><h4>身份匹配</h4>' + breakdownHTML + '</div>' +
+    '<div class="detail-section"><h4>OpenAlex 候选</h4>' + candidatesHTML + '</div>' +
     '<div class="detail-section"><h4>邮箱</h4>' + emailHTML + '</div>' +
     '<div class="detail-section"><h4>机构</h4>' + affHTML + '</div>' +
     '<div class="detail-section"><h4>研究领域</h4>' + topicsHTML + '</div>' +

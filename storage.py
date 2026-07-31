@@ -45,6 +45,11 @@ def init_db():
             works_count INTEGER DEFAULT 0,
             coauthors TEXT,
             sources TEXT,
+            email_source TEXT,
+            match_score REAL DEFAULT 0,
+            match_status TEXT DEFAULT 'unmatched',
+            match_breakdown TEXT,
+            candidates TEXT,
             crawled_at TEXT DEFAULT (datetime('now','localtime')),
             FOREIGN KEY (project_id) REFERENCES projects(id)
         )
@@ -65,6 +70,14 @@ def init_db():
         conn.execute("ALTER TABLE authors ADD COLUMN email_source TEXT")
     if "match_score" not in author_columns:
         conn.execute("ALTER TABLE authors ADD COLUMN match_score REAL DEFAULT 0")
+    if "match_status" not in author_columns:
+        conn.execute(
+            "ALTER TABLE authors ADD COLUMN match_status TEXT DEFAULT 'unmatched'"
+        )
+    if "match_breakdown" not in author_columns:
+        conn.execute("ALTER TABLE authors ADD COLUMN match_breakdown TEXT")
+    if "candidates" not in author_columns:
+        conn.execute("ALTER TABLE authors ADD COLUMN candidates TEXT")
     conn.commit()
     conn.close()
 
@@ -90,8 +103,9 @@ def save_authors(project_id: str, profiles: list):
             INSERT INTO authors (project_id, name, email, orcid, openalex_id,
                 google_scholar_url, researchgate_url, twitter_url, linkedin_url,
                 website_url, affiliations, topics, cited_by_count, works_count,
-                coauthors, sources, email_source, match_score)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                coauthors, sources, email_source, match_score, match_status,
+                match_breakdown, candidates)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             project_id,
             p.get("name", ""),
@@ -111,6 +125,9 @@ def save_authors(project_id: str, profiles: list):
             json.dumps(p.get("sources", []), ensure_ascii=False),
             p.get("email_source", ""),
             p.get("match_score", 0),
+            p.get("match_status", "unmatched"),
+            json.dumps(p.get("match_breakdown", {}), ensure_ascii=False),
+            json.dumps(p.get("candidates", []), ensure_ascii=False),
         ))
     conn.commit()
     conn.close()
@@ -145,11 +162,17 @@ def get_authors(project_id: str) -> list:
     results = []
     for row in rows:
         d = dict(row)
-        for field in ["affiliations", "topics", "coauthors", "sources"]:
+        for field in ["affiliations", "topics", "coauthors", "sources", "candidates"]:
             try:
                 d[field] = json.loads(d[field]) if d[field] else []
             except (json.JSONDecodeError, TypeError):
                 d[field] = []
+        try:
+            d["match_breakdown"] = (
+                json.loads(d["match_breakdown"]) if d.get("match_breakdown") else {}
+            )
+        except (json.JSONDecodeError, TypeError):
+            d["match_breakdown"] = {}
         results.append(d)
     return results
 
@@ -182,11 +205,17 @@ def get_all_authors() -> list:
     results = []
     for row in rows:
         d = dict(row)
-        for field in ["affiliations", "topics", "coauthors", "sources"]:
+        for field in ["affiliations", "topics", "coauthors", "sources", "candidates"]:
             try:
                 d[field] = json.loads(d[field]) if d[field] else []
             except (json.JSONDecodeError, TypeError):
                 d[field] = []
+        try:
+            d["match_breakdown"] = (
+                json.loads(d["match_breakdown"]) if d.get("match_breakdown") else {}
+            )
+        except (json.JSONDecodeError, TypeError):
+            d["match_breakdown"] = {}
         results.append(d)
     return results
 
