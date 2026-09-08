@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TalentMiner - 学术人物关系网络挖掘</title>
-<link rel="stylesheet" href="/style.css?v=5">
+<link rel="stylesheet" href="/style.css?v=15">
 </head>
 <body>
 <div class="app-container">
@@ -24,8 +24,42 @@
         <h2 class="panel-title">文献输入</h2>
         <div class="tab-bar">
           <button class="tab active" data-tab="pdf">上传 PDF</button>
+          <button class="tab" data-tab="history">历史回溯</button>
           <button class="tab" data-tab="doi">DOI 检索</button>
           <button class="tab" data-tab="text">粘贴文本</button>
+        </div>
+
+        <div id="tab-history" class="tab-content">
+          <div class="history-search-form">
+            <label>研究主题或关键词</label>
+            <input type="text" id="paper-query" class="text-input"
+                   placeholder="如 quantum error correction">
+            <div class="history-date-row">
+              <div><label>开始日期</label><input type="date" id="paper-date-from" class="text-input"></div>
+              <div><label>结束日期</label><input type="date" id="paper-date-to" class="text-input"></div>
+            </div>
+            <div class="history-date-row">
+              <div><label>最多预览</label><input type="number" id="paper-limit" class="text-input" min="1" max="500" value="100"></div>
+              <div><label>联系方式搜集范围</label>
+                <select id="paper-author-scope" class="text-input">
+                  <option value="all">全部作者</option>
+                  <option value="first">仅第一作者</option>
+                  <option value="corresponding">通讯作者（缺失时末位作者）</option>
+                </select>
+              </div>
+            </div>
+            <label class="history-check"><input type="checkbox" id="paper-oa-only"> 仅显示开放获取论文</label>
+            <button id="paper-preview-btn" class="btn btn-primary btn-full">搜索并预览论文</button>
+          </div>
+          <div id="paper-preview-panel" class="paper-preview-panel" style="display:none">
+            <div class="author-list-header">
+              <h3 id="paper-preview-summary">搜索结果</h3>
+              <button id="paper-toggle-all" class="btn btn-sm">全选/取消</button>
+            </div>
+            <div id="paper-preview-list" class="paper-preview-list"></div>
+            <button id="paper-start-btn" class="btn btn-primary btn-full" disabled>处理所选论文并搜集联系方式</button>
+            <p class="history-note">任务会在后台逐篇执行；开放PDF不可用时自动使用论文元数据。</p>
+          </div>
         </div>
 
         <div id="tab-pdf" class="tab-content active">
@@ -35,12 +69,26 @@
               <polyline points="17 8 12 3 7 8"/>
               <line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
-            <p class="drop-text">拖拽 PDF 文件到此处</p>
-            <p class="drop-hint">或点击选择文件</p>
-            <input type="file" id="file-input" accept=".pdf" hidden>
+            <p class="drop-text">拖拽一篇或多篇 PDF 到此处</p>
+            <p class="drop-hint">多篇论文将自动逐篇搜索，最多 20 篇</p>
+            <input type="file" id="file-input" accept=".pdf" multiple hidden>
           </div>
           <div id="upload-progress" class="progress-bar" style="display:none">
             <div class="progress-fill"></div>
+          </div>
+          <div id="batch-panel" class="batch-panel" style="display:none">
+            <div class="batch-summary">
+              <strong id="batch-title">批量任务</strong>
+              <span id="batch-status" class="batch-status batch-queued">等待中</span>
+            </div>
+            <div class="progress-bar">
+              <div id="batch-progress-fill" class="progress-fill" style="width:0%"></div>
+            </div>
+            <p id="batch-progress-text" class="progress-text">正在接收论文...</p>
+            <div id="batch-items" class="batch-items"></div>
+            <button id="batch-download-btn" class="btn btn-primary btn-full" style="display:none">
+              📥 下载批量联系人 CSV
+            </button>
           </div>
         </div>
 
@@ -90,10 +138,63 @@
         <div id="stats-content"></div>
       </div>
 
+      <div id="expansion-panel" class="panel expansion-panel" style="display:none">
+        <h2 class="panel-title">人物深度搜集</h2>
+        <p id="expansion-summary" class="progress-text">发现可深挖的合作者或实验室成员</p>
+        <button id="expand-top-btn" class="btn btn-primary btn-full">
+          深度搜集前 5 名合作网络候选
+        </button>
+        <button id="expand-lab-btn" class="btn btn-primary btn-full" style="margin-top:8px">
+          批量核对并搜索实验室成员
+        </button>
+        <div id="expansion-progress" style="display:none">
+          <div class="progress-bar">
+            <div id="expansion-progress-fill" class="progress-fill" style="width:0%"></div>
+          </div>
+          <p id="expansion-progress-text" class="progress-text">准备中...</p>
+          <div id="expansion-items" class="batch-items"></div>
+        </div>
+      </div>
+
       <div class="panel history-panel">
         <div class="history-header">
           <h2 class="panel-title">历史记录</h2>
-          <button id="refresh-history-btn" class="btn btn-sm">刷新</button>
+          <div class="history-header-actions">
+            <button id="merge-contacts-btn" class="btn btn-sm btn-primary">合并联系方式</button>
+            <button id="refresh-history-btn" class="btn btn-sm">刷新</button>
+          </div>
+        </div>
+        <div id="merge-builder" class="merge-builder" style="display:none">
+          <label>合并任务名称</label>
+          <input id="merge-task-name" class="text-input" type="text" placeholder="如：量子纠错人才联系方式汇总">
+          <div class="merge-filter-grid">
+            <input id="merge-search" class="text-input" type="search" placeholder="搜索论文标题、DOI 或任务 ID">
+            <select id="merge-batch-filter" class="text-input" aria-label="按批次筛选">
+              <option value="">全部批次</option>
+            </select>
+            <select id="merge-type-filter" class="text-input" aria-label="按来源类型筛选">
+              <option value="">全部来源</option>
+              <option value="historical">历史回溯</option>
+              <option value="pdf">上传 PDF</option>
+              <option value="doi">DOI 检索</option>
+              <option value="text">粘贴文本</option>
+            </select>
+            <label class="merge-filter-date"><span>开始日期</span><input id="merge-date-from" class="text-input" type="date"></label>
+            <label class="merge-filter-date"><span>结束日期</span><input id="merge-date-to" class="text-input" type="date"></label>
+          </div>
+          <div class="merge-builder-head">
+            <span id="merge-selection-count">请选择需要合并的论文</span>
+            <span id="merge-filter-count"></span>
+          </div>
+          <div class="merge-select-actions">
+            <button id="merge-select-visible" class="btn btn-sm">选择当前筛选结果</button>
+            <button id="merge-clear-selection" class="btn btn-sm">清空选择</button>
+          </div>
+          <div id="merge-project-list" class="merge-project-list"></div>
+          <div class="merge-builder-actions">
+            <button id="merge-cancel-btn" class="btn btn-sm">取消</button>
+            <button id="merge-create-btn" class="btn btn-sm btn-primary" disabled>创建合并任务</button>
+          </div>
         </div>
         <div id="history-list" class="history-list">
           <span style="color:var(--text-secondary);font-size:11px">加载中...</span>
@@ -123,17 +224,33 @@
           </label>
           <span id="graph-search-count" class="graph-search-count"></span>
         </div>
+        <div class="toolbar-group candidate-filters" aria-label="毕业候选筛选">
+          <span class="legend-label">人才筛选</span>
+          <label class="filter-label" title="只显示有明确或较强临近毕业证据的人物">
+            <input type="checkbox" id="show-graduating-only"> 临近毕业
+          </label>
+          <label class="filter-label" title="按官网角色、实验室名单和弱学术信号综合判断">
+            <input type="checkbox" id="show-students-only"> 学生候选
+          </label>
+          <label class="filter-label" title="只显示存在中国教育、机构或明确国籍证据的人物；不按姓名推断">
+            <input type="checkbox" id="show-china-linked-only"> 中国关联证据
+          </label>
+        </div>
         <div class="toolbar-group node-legend" aria-label="人物节点图例">
           <span class="legend-label">节点</span>
           <span class="legend-dot legend-core"></span> 目标作者
+          <span class="legend-dot legend-graduate"></span> 毕业候选
           <span class="legend-dot legend-external"></span> 关联人物
+          <span class="legend-dot legend-lab"></span> 实验室成员
+          <span class="legend-dot legend-lab-entity"></span> 实验室
+          <span class="legend-dot legend-paper"></span> 来源论文
         </div>
         <div class="toolbar-group relation-legend" aria-label="关系连线图例">
           <span class="legend-label">连线</span>
-          <label class="filter-label relation-legend-item" title="蓝色实线：OpenAlex 共同署名记录">
+          <label class="filter-label relation-legend-item" title="蓝色实线：历史合作；紫色虚线：大型论文署名关系">
             <input type="checkbox" id="show-coauthor" checked>
             <span class="legend-line legend-line-coauthor"></span>
-            <span>合作</span>
+            <span>合作 / 论文署名</span>
           </label>
           <label class="filter-label relation-legend-item" title="绿色虚线：两人的机构信息相同">
             <input type="checkbox" id="show-affiliation" checked>
@@ -145,7 +262,26 @@
             <span class="legend-line legend-line-topic"></span>
             <span>同领域</span>
           </label>
+          <label class="filter-label relation-legend-item" title="青色虚线：人物与实验室的官网隶属关系；粉色表示 PI">
+            <input type="checkbox" id="show-lab" checked>
+            <span class="legend-line legend-line-lab"></span>
+            <span>实验室隶属 / PI</span>
+          </label>
         </div>
+      </div>
+
+      <div id="current-project-banner" class="current-project-banner" style="display:none">
+        <div class="current-project-main">
+          <span class="current-project-label">当前论文</span>
+          <strong id="current-project-title"></strong>
+          <span id="current-project-meta"></span>
+        </div>
+        <div class="current-project-actions">
+          <button id="copy-project-title" class="btn btn-sm">复制题名</button>
+          <a id="current-project-source" class="btn btn-sm current-project-source" target="_blank" rel="noopener" style="display:none">打开论文来源</a>
+          <button id="toggle-source-papers" class="btn btn-sm" style="display:none"></button>
+        </div>
+        <div id="current-project-papers" class="current-project-papers" style="display:none"></div>
       </div>
 
       <div id="graph-container" class="graph-container">
@@ -174,6 +310,6 @@
 </div>
 
 <script src="/d3.v7.min.js"></script>
-<script src="/app.js?v=5"></script>
+<script src="/app.js?v=25"></script>
 </body>
 </html>

@@ -275,7 +275,7 @@ def _extract_numbered_affiliation_map(text: str) -> dict[str, str]:
         for number, affiliation in affiliations.items()
         if any(word in affiliation.lower() for word in (
             "university", "academy", "institute", "laboratory",
-            "department", "center", "centre", "sciences",
+            "department", "center", "centre", "sciences", "research",
         ))
     }
 
