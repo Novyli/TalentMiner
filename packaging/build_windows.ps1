@@ -18,6 +18,9 @@ if (-not $Iscc) {
     throw "Inno Setup is required. Install it with: choco install innosetup"
 }
 & $Iscc.Source "packaging/windows-installer.iss"
+if ($LASTEXITCODE -ne 0) {
+    throw "Inno Setup failed with exit code $LASTEXITCODE"
+}
 
 if ($env:WINDOWS_CERT_PATH) {
     & $SignTool.Source sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `

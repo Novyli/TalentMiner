@@ -31,6 +31,7 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: release/*.dmg
+          if-no-files-found: error
 
   windows:
     runs-on: windows-latest
@@ -47,6 +48,7 @@ jobs:
         with:
           name: TalentMiner-Windows-x64
           path: release/*.exe
+          if-no-files-found: error
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
@@ -62,6 +64,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           mapfile -d '' assets < <(find release-assets -type f -print0)
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
