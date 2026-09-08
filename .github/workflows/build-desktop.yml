@@ -1,0 +1,73 @@
+name: Build desktop installers
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  macos:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-14
+            artifact: TalentMiner-macOS-Intel
+          - runner: macos-14-arm64
+            artifact: TalentMiner-macOS-Apple-Silicon
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements-desktop.txt
+      - run: PYTHON_BIN=python bash packaging/build_macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: release/*.dmg
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements-desktop.txt
+      - run: choco install innosetup --no-progress -y
+      - run: powershell -ExecutionPolicy Bypass -File packaging/build_windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TalentMiner-Windows-x64
+          path: release/*.exe
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - macos
+      - windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+      - name: Publish installers to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -d '' assets < <(find release-assets -type f -print0)
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+              --title "TalentMiner $GITHUB_REF_NAME" \
+              --generate-notes
+          fi

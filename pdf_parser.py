@@ -275,7 +275,7 @@ def _extract_numbered_affiliation_map(text: str) -> dict[str, str]:
         for number, affiliation in affiliations.items()
         if any(word in affiliation.lower() for word in (
             "university", "academy", "institute", "laboratory",
-            "department", "center", "centre", "sciences",
+            "department", "center", "centre", "sciences", "research",
         ))
     }
 
@@ -322,15 +322,26 @@ def extract_context(text: str) -> dict:
         institutions.add(m)
     for affiliation in _extract_numbered_affiliation_map(text).values():
         institutions.add(affiliation)
+    # Restrict topic extraction to the title/abstract area and require word
+    # boundaries for English terms. This avoids hits such as "ai" inside an
+    # unrelated word or generic terms from references and body text.
     keywords = set()
-    kw_pattern = re.compile(
-        r'(?:量子|编译(?:器)?|图表示|电路|调优|pass|Bayesian|optimization|Neural|Network|'
-        r'Deep\s+Learning|Machine\s+Learning|AI|quantum|circuit|graph|compiler|'
-        r'reinforcement|learning|transformer|LLM)',
-        re.IGNORECASE
-    )
-    for m in kw_pattern.findall(text):
-        keywords.add(m.lower())
+    context_text = text[:12000]
+    chinese_pattern = re.compile(r'(?:量子|编译器?|图表示|电路|调优)')
+    for match in chinese_pattern.findall(context_text):
+        keywords.add(match.lower())
+    english_terms = [
+        "bayesian optimization", "deep learning", "machine learning",
+        "reinforcement learning", "neural network", "quantum", "circuit",
+        "compiler", "transformer", "llm",
+    ]
+    for term in english_terms:
+        if re.search(
+            rf"(?<![A-Za-z0-9]){re.escape(term)}(?![A-Za-z0-9])",
+            context_text,
+            re.IGNORECASE,
+        ):
+            keywords.add(term.lower())
     # Name → institution mapping (from "来自XXX的**Name**" pattern)
     name_inst_map = {}
     for m in re.finditer(
