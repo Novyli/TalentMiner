@@ -14,9 +14,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: macos-14
+          - runner: macos-15-intel
             artifact: TalentMiner-macOS-Intel
-          - runner: macos-14-arm64
+          - runner: macos-14
             artifact: TalentMiner-macOS-Apple-Silicon
     runs-on: ${{ matrix.runner }}
     steps:
