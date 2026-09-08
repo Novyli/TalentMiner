@@ -138,6 +138,7 @@ function renderPaperPreview(result) {
   document.getElementById('paper-preview-summary').textContent =
     `预览 ${result.returned || 0} 篇（约命中 ${result.estimated_total || 0} 篇）` +
     (result.duplicates_removed ? ` · 已自动去重 ${result.duplicates_removed} 条` : '') +
+    (result.unavailable_removed ? ` · 已过滤失效论文 ${result.unavailable_removed} 条` : '') +
     (result.notice ? ` · ${result.notice}` : '');
   document.getElementById('paper-preview-list').innerHTML = state.discoveredPapers.map((paper, index) => {
     const authors = (paper.authors || []).slice(0, 4).join('、');

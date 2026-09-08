@@ -67,10 +67,14 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           mapfile -d '' assets < <(find release-assets -type f -print0)
+          prerelease=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            prerelease+=(--prerelease)
+          fi
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
           else
             gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
               --title "TalentMiner $GITHUB_REF_NAME" \
-              --generate-notes
+              --generate-notes "${prerelease[@]}"
           fi

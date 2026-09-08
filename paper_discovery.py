@@ -18,10 +18,16 @@ USER_AGENT = "TalentMiner/1.1 (historical paper discovery)"
 OPENALEX_MIN_REQUEST_INTERVAL = 0.4
 OPENALEX_MAX_RETRIES = 5
 SEARCH_CACHE_TTL_SECONDS = 600
+ZENODO_DOI_URL = "https://doi.org/10.5281/zenodo.{record_id}"
+ZENODO_OPENALEX_SOURCE_ID = "S4306400562"
+REPOSITORY_CHECK_CONCURRENCY = 20
+REPOSITORY_CHECK_TIMEOUT_SECONDS = 12
+REPOSITORY_CHECK_CACHE_TTL_SECONDS = 3600
 
 _openalex_request_lock = asyncio.Lock()
 _last_openalex_request_at = 0.0
 _search_cache = {}
+_repository_check_cache = {}
 
 
 class OpenAlexQuotaExhausted(RuntimeError):
@@ -204,6 +210,8 @@ async def search_crossref_works(
         if item.get("type") not in allowed_types:
             continue
         paper = compact_crossref_work(item)
+        if zenodo_record_id(paper):
+            continue
         if not paper.get("identity") or not paper.get("title") or not paper.get("authorships"):
             continue
         if open_access_only and not paper.get("pdf_url"):
@@ -225,6 +233,71 @@ def normalize_doi(value: str) -> str:
     value = (value or "").strip().lower()
     value = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", value)
     return value.removeprefix("doi:").strip()
+
+
+def zenodo_record_id(work: dict) -> str:
+    """Return the numeric Zenodo record identifier embedded in a DOI or URL."""
+    doi = normalize_doi(work.get("doi") or "")
+    match = re.fullmatch(r"10\.5281/zenodo\.(\d+)", doi)
+    if match:
+        return match.group(1)
+    for key in ("landing_page_url", "pdf_url"):
+        match = re.search(r"zenodo\.org/(?:records?|api/records)/(\d+)", work.get(key) or "")
+        if match:
+            return match.group(1)
+    return ""
+
+
+def is_unusable_repository_record(work: dict) -> bool:
+    """Reject metadata-only Zenodo deposits that cannot supply a paper PDF."""
+    return bool(zenodo_record_id(work) and not work.get("pdf_url"))
+
+
+async def _zenodo_record_available(
+    session: aiohttp.ClientSession, record_id: str, semaphore: asyncio.Semaphore
+) -> bool:
+    """Reject confirmed deleted records while retaining transiently unreachable ones."""
+    cached = _repository_check_cache.get(record_id)
+    if cached and time.monotonic() - cached[0] < REPOSITORY_CHECK_CACHE_TTL_SECONDS:
+        return cached[1]
+    available = True
+    try:
+        async with semaphore:
+            async with session.get(
+                ZENODO_DOI_URL.format(record_id=record_id),
+                allow_redirects=True,
+                timeout=aiohttp.ClientTimeout(total=REPOSITORY_CHECK_TIMEOUT_SECONDS),
+            ) as response:
+                if response.status in {404, 410}:
+                    available = False
+                elif response.status == 200:
+                    available = True
+                else:
+                    # Rate limits and server errors are not evidence that a paper vanished.
+                    return True
+    except (aiohttp.ClientError, asyncio.TimeoutError):
+        return True
+    _repository_check_cache[record_id] = (time.monotonic(), available)
+    return available
+
+
+async def filter_unavailable_repository_records(
+    session: aiohttp.ClientSession, papers: list[dict]
+) -> tuple[list[dict], int]:
+    """Remove Zenodo records whose public DOI redirect confirms 404/410."""
+    semaphore = asyncio.Semaphore(REPOSITORY_CHECK_CONCURRENCY)
+    checks = []
+    for paper in papers:
+        record_id = zenodo_record_id(paper)
+        if is_unusable_repository_record(paper):
+            checks.append(asyncio.sleep(0, result=False))
+        elif record_id:
+            checks.append(_zenodo_record_available(session, record_id, semaphore))
+        else:
+            checks.append(asyncio.sleep(0, result=True))
+    availability = await asyncio.gather(*checks)
+    available = [paper for paper, keep in zip(papers, availability) if keep]
+    return available, len(papers) - len(available)
 
 
 def paper_identity(work: dict) -> str:
@@ -327,9 +400,13 @@ def compact_work(work: dict) -> dict:
         "cited_by_count": int(work.get("cited_by_count") or 0),
         "is_retracted": bool(work.get("is_retracted")),
         "venue": source.get("display_name") or "",
+        "source_type": source.get("type") or "",
         "landing_page_url": primary.get("landing_page_url") or "",
         "pdf_url": _pdf_url(work),
         "is_open_access": bool((work.get("open_access") or {}).get("is_oa")),
+        "is_accepted": bool(primary.get("is_accepted")),
+        "is_published": bool(primary.get("is_published")),
+        "has_fulltext": bool(work.get("has_fulltext")),
         "authorships": authorships,
         "topics": [
             item.get("display_name") for item in (work.get("topics") or [])
@@ -372,6 +449,7 @@ async def search_historical_works(
         f"from_publication_date:{start.isoformat()}",
         f"to_publication_date:{end.isoformat()}",
         "type:article|preprint",
+        f"primary_location.source.id:!{ZENODO_OPENALEX_SOURCE_ID}",
     ]
     if open_access_only:
         filters.append("open_access.is_oa:true")
@@ -381,7 +459,9 @@ async def search_historical_works(
         # Search relevance is the safer default for historical talent discovery;
         # the explicit date filters already constrain recency.
         "sort": "relevance_score:desc",
-        "per_page": min(100, limit),
+        # Always fetch a full page so deleted repository records do not force
+        # dozens of small sequential OpenAlex requests for a small preview.
+        "per_page": 100,
         "cursor": "*",
     }
     api_key = os.environ.get("OPENALEX_API_KEY", "").strip()
@@ -389,16 +469,20 @@ async def search_historical_works(
         params["api_key"] = api_key
     results = []
     estimated_total = 0
+    unavailable_removed = 0
     timeout = aiohttp.ClientTimeout(total=45)
     try:
         async with aiohttp.ClientSession(timeout=timeout, headers={"User-Agent": USER_AGENT}) as session:
             while len(deduplicate_papers(results)) < limit:
                 payload = await _request_openalex_page(session, params, api_key)
                 estimated_total = int((payload.get("meta") or {}).get("count") or 0)
-                page = [compact_work(item) for item in (payload.get("results") or [])]
+                raw_page = payload.get("results") or []
+                page = [compact_work(item) for item in raw_page]
+                page, removed = await filter_unavailable_repository_records(session, page)
+                unavailable_removed += removed
                 results.extend(item for item in page if item.get("identity") and not item.get("is_retracted"))
                 cursor = (payload.get("meta") or {}).get("next_cursor")
-                if not cursor or not page:
+                if not cursor or not raw_page:
                     break
                 params["cursor"] = cursor
     except OpenAlexQuotaExhausted:
@@ -413,6 +497,8 @@ async def search_historical_works(
         "estimated_total": estimated_total, "returned": len(papers),
         "papers": papers, "metadata_source": "openalex",
         "duplicates_removed": len(results) - len(unique_results),
+        "unavailable_removed": unavailable_removed,
+        "notice": "已默认排除 Zenodo 通用仓库记录。",
     }
     _search_cache[cache_key] = (time.monotonic(), result)
     return result

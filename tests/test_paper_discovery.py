@@ -1,3 +1,4 @@
+import asyncio
 import json
 import tempfile
 import unittest
@@ -7,7 +8,9 @@ import storage
 from app import apply_author_scope, prepare_work_metadata
 from paper_discovery import (
     _retry_after_seconds, compact_crossref_work, compact_work,
-    deduplicate_papers, normalize_doi, paper_fingerprint, paper_identity,
+    deduplicate_papers, filter_unavailable_repository_records, normalize_doi,
+    is_unusable_repository_record, paper_fingerprint, paper_identity,
+    zenodo_record_id,
 )
 
 
@@ -73,6 +76,58 @@ def sample_crossref_work():
 
 
 class PaperDiscoveryTests(unittest.TestCase):
+    def test_extracts_zenodo_record_id_from_doi_and_url(self):
+        self.assertEqual(
+            zenodo_record_id({"doi": "https://doi.org/10.5281/zenodo.22445020"}),
+            "22445020",
+        )
+        self.assertEqual(
+            zenodo_record_id({"landing_page_url": "https://zenodo.org/records/42"}),
+            "42",
+        )
+        self.assertEqual(zenodo_record_id({"doi": "10.1234/example"}), "")
+
+    def test_rejects_metadata_only_zenodo_record_without_pdf(self):
+        self.assertTrue(is_unusable_repository_record({
+            "doi": "10.5281/zenodo.22445020",
+            "source_type": "repository",
+            "is_accepted": False,
+            "is_published": False,
+            "has_fulltext": False,
+            "pdf_url": "",
+        }))
+        self.assertFalse(is_unusable_repository_record({
+            "doi": "10.5281/zenodo.42",
+            "source_type": "repository",
+            "pdf_url": "https://zenodo.org/records/42/files/paper.pdf",
+        }))
+
+    def test_filters_confirmed_deleted_zenodo_records(self):
+        class FakeResponse:
+            def __init__(self, status):
+                self.status = status
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+        class FakeSession:
+            def get(self, url, **_kwargs):
+                return FakeResponse(410 if url.endswith("22445020") else 200)
+
+        deleted = {
+            "doi": "10.5281/zenodo.22445020",
+            "title": "Deleted repository record",
+        }
+        valid = {"doi": "10.1234/valid", "title": "Valid journal paper"}
+        papers, removed = asyncio.run(
+            filter_unavailable_repository_records(FakeSession(), [deleted, valid])
+        )
+        self.assertEqual(papers, [valid])
+        self.assertEqual(removed, 1)
+
     def test_deduplicates_repository_records_with_distinct_dois(self):
         first = compact_work(sample_work())
         duplicate = compact_work({
