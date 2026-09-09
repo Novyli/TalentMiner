@@ -15,6 +15,49 @@ from pathlib import Path
 APP_NAME = "GQI Talent Radar"
 # Keep the legacy folder name so upgrades retain every task and contact.
 APP_DATA_DIR_NAME = "TalentMiner"
+MAX_CSV_EXPORT_BYTES = 50 * 1024 * 1024
+
+
+class DesktopApi:
+    """Native operations that an embedded browser cannot perform reliably."""
+
+    def __init__(self) -> None:
+        self.window = None
+
+    def save_csv(self, content: str, suggested_filename: str) -> dict:
+        """Show a native Save dialog and persist UTF-8 CSV with a .csv suffix."""
+        if self.window is None:
+            return {"status": "error", "message": "桌面窗口尚未初始化"}
+
+        filename = str(suggested_filename or "contacts.csv")
+        filename = filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if not filename.lower().endswith(".csv"):
+            filename += ".csv"
+        if not filename or filename == ".csv":
+            filename = "contacts.csv"
+
+        encoded = str(content or "").lstrip("\ufeff").encode("utf-8-sig")
+        if len(encoded) > MAX_CSV_EXPORT_BYTES:
+            return {"status": "error", "message": "CSV 文件过大，无法从桌面端导出"}
+
+        try:
+            import webview
+
+            selected = self.window.create_file_dialog(
+                webview.FileDialog.SAVE,
+                save_filename=filename,
+                file_types=("CSV 文件 (*.csv)",),
+            )
+            if not selected:
+                return {"status": "cancelled"}
+            destination = selected[0] if isinstance(selected, (tuple, list)) else selected
+            destination = str(destination)
+            if not destination.lower().endswith(".csv"):
+                destination += ".csv"
+            Path(destination).write_bytes(encoded)
+            return {"status": "saved", "path": destination}
+        except Exception as exc:
+            return {"status": "error", "message": f"保存 CSV 失败：{exc}"}
 
 
 def app_data_dir() -> Path:
@@ -89,13 +132,16 @@ def main() -> None:
     server_thread.start()
     wait_until_ready(url)
 
-    webview.create_window(
+    desktop_api = DesktopApi()
+    window = webview.create_window(
         APP_NAME,
         url,
+        js_api=desktop_api,
         width=1440,
         height=900,
         min_size=(1050, 680),
     )
+    desktop_api.window = window
     try:
         webview.start(debug=False)
     finally:

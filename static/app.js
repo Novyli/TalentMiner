@@ -84,6 +84,28 @@ async function api(method, path, body) {
   return contentType.includes('application/json') ? res.json() : res.text();
 }
 
+async function saveCsvBlob(blob, filename) {
+  // pywebview does not consistently honor <a download> for blob URLs. Let the
+  // desktop shell own the Save dialog; ordinary browsers keep native downloads.
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.save_csv) {
+    const result = await window.pywebview.api.save_csv(await blob.text(), filename);
+    if (!result || result.status === 'error') {
+      throw new Error((result && result.message) || '桌面端保存失败');
+    }
+    return result.status === 'saved';
+  }
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
+}
+
 function setStatus(text, cls) {
   const el = document.getElementById('status-indicator');
   el.textContent = text; el.className = cls;
@@ -419,15 +441,7 @@ document.getElementById('batch-download-btn').addEventListener('click', async ()
       const error = await res.json().catch(() => ({}));
       throw new Error(error.detail || '下载失败');
     }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = state.batchId + '-contacts.csv';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    await saveCsvBlob(await res.blob(), state.batchId + '-contacts.csv');
   } catch (e) {
     alert('批量 CSV 下载失败: ' + e.message);
   }
@@ -1464,16 +1478,11 @@ document.getElementById('download-csv-btn').addEventListener('click', async () =
   }
   try {
     const data = await api('POST', '/api/export-csv', { profiles: state.profiles });
-    const blob = new Blob([data], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'authors_contacts.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    setStatus('CSV 已下载', 'status-done');
+    const saved = await saveCsvBlob(
+      new Blob([data], { type: 'text/csv;charset=utf-8;' }),
+      'authors_contacts.csv'
+    );
+    if (saved) setStatus('CSV 已保存', 'status-done');
   } catch (e) {
     alert('CSV 导出失败: ' + e.message);
   }
@@ -1655,15 +1664,7 @@ async function downloadProjectCSV(projectId) {
   try {
     const res = await fetch(API + '/api/projects/' + projectId + '/csv');
     if (!res.ok) throw new Error('Download failed');
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = projectId + '.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    await saveCsvBlob(await res.blob(), projectId + '.csv');
   } catch (e) {
     alert('CSV 下载失败: ' + e.message);
   }
