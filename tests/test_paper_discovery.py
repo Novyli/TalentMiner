@@ -9,8 +9,8 @@ from app import apply_author_scope, prepare_work_metadata
 from paper_discovery import (
     _retry_after_seconds, compact_crossref_work, compact_work,
     deduplicate_papers, filter_unavailable_repository_records, normalize_doi,
-    is_unusable_repository_record, paper_fingerprint, paper_identity,
-    zenodo_record_id,
+    filter_relevant_papers, is_unusable_repository_record, paper_fingerprint,
+    paper_identity, paper_relevance, zenodo_record_id,
 )
 
 
@@ -76,6 +76,82 @@ def sample_crossref_work():
 
 
 class PaperDiscoveryTests(unittest.TestCase):
+    def test_strict_quantum_computing_relevance_keeps_core_research(self):
+        examples = [
+            {
+                "title": "Filtered Quantum Phase Estimation",
+                "topics": ["Quantum Computing Algorithms and Architecture"],
+            },
+            {
+                "title": "Hardware-aware quantum error correction for superconducting qubits",
+                "topics": [],
+            },
+            {
+                "title": "Extending computational reach with quantum annealing",
+                "topics": [],
+            },
+        ]
+        for paper in examples:
+            with self.subTest(title=paper["title"]):
+                self.assertTrue(paper_relevance(paper, "quantum computing")[0])
+
+    def test_strict_quantum_computing_relevance_rejects_adjacent_fields(self):
+        examples = [
+            "On-shell recursion in worldline quantum field theory",
+            "Quantum-well metasurface for nonlinear polarization",
+            "Post-Quantum Lightweight Signcryption Scheme",
+            "Quantum-Adaptive Cryptography for Blockchain Security",
+            "Combinatorial optimization of UAV communication bridges",
+            "A quantum-inspired transformer for intrusion detection",
+        ]
+        for title in examples:
+            with self.subTest(title=title):
+                self.assertFalse(paper_relevance(
+                    {"title": title, "topics": []}, "quantum computing"
+                )[0])
+
+    def test_quantum_computing_topic_needs_supporting_content_evidence(self):
+        mislabeled = {
+            "title": "Momentum-driven reversible logic for universal computation",
+            "topics": ["Quantum Computing Algorithms and Architecture"],
+        }
+        supported = {
+            "title": "Detecting entanglement from partial transpose moments",
+            "topics": ["Quantum Computing Algorithms and Architecture"],
+        }
+        self.assertFalse(paper_relevance(mislabeled, "quantum computing")[0])
+        self.assertTrue(paper_relevance(supported, "quantum computing")[0])
+
+    def test_strict_filter_rejects_dataset_metadata_records(self):
+        dataset = {
+            "title": "Dataset for Sampling hard circuits with high fidelity",
+            "topics": ["Quantum Computing Algorithms and Architecture"],
+        }
+        self.assertFalse(paper_relevance(dataset, "quantum computing")[0])
+
+    def test_generic_relevance_requires_query_coverage(self):
+        relevant = {
+            "title": "Fault-tolerant architectures",
+            "topics": ["Quantum error correction"],
+        }
+        unrelated = {
+            "title": "Classical error correction for storage",
+            "topics": ["Computer networks"],
+        }
+        self.assertTrue(paper_relevance(relevant, "quantum error correction")[0])
+        self.assertFalse(paper_relevance(unrelated, "quantum error correction")[0])
+
+    def test_relevance_filter_explains_and_counts_removed_papers(self):
+        papers = [
+            {"title": "Variational quantum classifier", "topics": []},
+            {"title": "Artificial Intelligence in Biomaterials", "topics": []},
+        ]
+        kept, removed = filter_relevant_papers(papers, "quantum computing")
+        self.assertEqual(removed, 1)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0]["relevance_score"], 90)
+        self.assertTrue(kept[0]["relevance_reason"])
+
     def test_extracts_zenodo_record_id_from_doi_and_url(self):
         self.assertEqual(
             zenodo_record_id({"doi": "https://doi.org/10.5281/zenodo.22445020"}),

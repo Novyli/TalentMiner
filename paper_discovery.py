@@ -23,6 +23,32 @@ ZENODO_OPENALEX_SOURCE_ID = "S4306400562"
 REPOSITORY_CHECK_CONCURRENCY = 20
 REPOSITORY_CHECK_TIMEOUT_SECONDS = 12
 REPOSITORY_CHECK_CACHE_TTL_SECONDS = 3600
+RELEVANCE_FILTER_VERSION = 1
+
+QUERY_STOP_WORDS = {
+    "a", "an", "and", "for", "from", "in", "of", "on", "or", "the", "to",
+    "using", "via", "with",
+}
+QUANTUM_COMPUTING_TOPIC = "quantum computing algorithms and architecture"
+QUANTUM_COMPUTING_SIGNALS = (
+    "quantum algorithm", "quantum arithmetic", "quantum circuit",
+    "quantum computer", "quantum computation", "quantum computing",
+    "quantum error correction", "quantum machine learning",
+    "quantum neural network", "quantum phase estimation", "quantum simulator",
+    "quantum teleportation", "quantum walk", "quantum workload",
+    "quantum classical", "quantum hpc", "quantum eigensolver",
+    "variational quantum", "fault tolerant quantum", "superconducting qubit",
+    "spin qubit", "photonic graph state", "magic state", "circuit cutting",
+    "gate teleportation", "computational advantage", "qiskit", "qubit",
+    "quantum anneal", "superdense coding",
+)
+QUANTUM_COMPUTING_EVIDENCE = (
+    "quantum", "qubit", "qiskit", "circuit", "entangl", "qudit", "rydberg",
+    "eigenstate", "phase gate", "magic state",
+)
+NON_PAPER_TITLE_PREFIXES = (
+    "data and source code for ", "dataset for ", "source code for ",
+)
 
 _openalex_request_lock = asyncio.Lock()
 _last_openalex_request_at = 0.0
@@ -170,6 +196,9 @@ def compact_crossref_work(item: dict) -> dict:
         "is_open_access": bool(pdf_url),
         "authorships": authorships,
         "topics": list(item.get("subject") or [])[:10],
+        "_relevance_abstract": re.sub(
+            r"<[^>]+>", " ", item.get("abstract") or ""
+        )[:4000],
         "metadata_source": "Crossref（OpenAlex 配额耗尽后的备用检索）",
     }
     result["identity"] = paper_identity(result)
@@ -217,15 +246,19 @@ async def search_crossref_works(
         if open_access_only and not paper.get("pdf_url"):
             continue
         candidates.append(paper)
+    candidates, relevance_filtered = filter_relevant_papers(candidates, query)
     unique_candidates = deduplicate_papers(candidates)
     papers = unique_candidates[:limit]
+    for paper in papers:
+        paper.pop("_relevance_abstract", None)
     return {
         "estimated_total": int(message.get("total-results") or 0),
         "returned": len(papers),
         "papers": papers,
         "duplicates_removed": len(candidates) - len(unique_candidates),
+        "relevance_filtered": relevance_filtered,
         "metadata_source": "crossref",
-        "notice": "OpenAlex 今日额度已耗尽，已自动使用 Crossref 备用检索。",
+        "notice": "OpenAlex 今日额度已耗尽，已使用 Crossref 并执行严格相关性筛选。",
     }
 
 
@@ -313,6 +346,95 @@ def _fingerprint_text(value: str) -> str:
     return " ".join(re.findall(r"[\w]+", value, flags=re.UNICODE))
 
 
+def _query_terms(query: str) -> list[str]:
+    """Return stable, meaningful terms for strict topic matching."""
+    return [
+        term for term in _fingerprint_text(query).split()
+        if len(term) > 1 and term not in QUERY_STOP_WORDS
+    ]
+
+
+def _term_present(term: str, text: str) -> bool:
+    if term.startswith("comput"):
+        return bool(re.search(r"\bcomput(?:e|er|ers|ing|ation|ations|ational)?\b", text))
+    if term.endswith("s") and len(term) > 4:
+        return bool(re.search(rf"\b{re.escape(term[:-1])}s?\b", text))
+    return bool(re.search(rf"\b{re.escape(term)}\b", text))
+
+
+def _is_quantum_computing_query(terms: list[str]) -> bool:
+    return len(terms) == 2 and "quantum" in terms and any(
+        term.startswith("comput") for term in terms
+    )
+
+
+def paper_relevance(work: dict, query: str) -> tuple[bool, int, str]:
+    """Apply conservative topic matching and explain why a work was retained."""
+    terms = _query_terms(query)
+    if not terms:
+        return True, 50, "检索词过短，未启用严格筛选"
+
+    title = _fingerprint_text(work.get("title") or "")
+    topics = _fingerprint_text(" ".join(work.get("topics") or []))
+    abstract = _fingerprint_text(work.get("_relevance_abstract") or "")
+    query_text = _fingerprint_text(query)
+
+    if _is_quantum_computing_query(terms):
+        if any(title.startswith(prefix) for prefix in NON_PAPER_TITLE_PREFIXES):
+            return False, 0, "属于数据或源代码记录，不是论文"
+        if "quantum inspired" in title or "post quantum" in title:
+            return False, 0, "仅涉及量子启发式或后量子密码"
+        if (
+            any(term in title for term in ("cryptograph", "signcryption", "blockchain"))
+            and "quantum information and cryptography" not in topics
+            and "quantum computing" not in title
+        ):
+            return False, 0, "密码学内容缺少量子计算或量子信息证据"
+        if "quantum computing" in title or "quantum computation" in title:
+            return True, 100, "标题明确包含量子计算"
+        if any(signal in title for signal in QUANTUM_COMPUTING_SIGNALS):
+            return True, 90, "标题包含量子计算核心概念"
+        if QUANTUM_COMPUTING_TOPIC in topics and (
+            any(signal in title for signal in QUANTUM_COMPUTING_EVIDENCE)
+            or any(signal in abstract for signal in QUANTUM_COMPUTING_SIGNALS)
+        ):
+            return True, 80, "学术主题与标题或摘要共同指向量子计算"
+        return False, 0, "缺少量子计算核心主题"
+
+    if query_text and query_text in title:
+        return True, 100, "标题包含完整检索词"
+    title_matches = sum(_term_present(term, title) for term in terms)
+    topic_matches = sum(_term_present(term, topics) for term in terms)
+    combined = " ".join((title, topics))
+    combined_matches = sum(_term_present(term, combined) for term in terms)
+    if title_matches == len(terms):
+        return True, 90, "标题覆盖全部检索词"
+    if query_text and query_text in topics:
+        return True, 85, "学术主题包含完整检索词"
+    if combined_matches == len(terms) and title_matches + topic_matches >= len(terms):
+        return True, 75, "标题与学术主题共同覆盖检索词"
+    if query_text and query_text in abstract and title_matches + topic_matches:
+        return True, 65, "摘要包含完整检索词"
+    if len(terms) == 1 and (title_matches or topic_matches):
+        return True, 75, "标题或学术主题匹配检索词"
+    return False, 0, "与检索主题关联不足"
+
+
+def filter_relevant_papers(
+    papers: list[dict], query: str
+) -> tuple[list[dict], int]:
+    """Keep only papers that pass the explainable strict relevance gate."""
+    relevant = []
+    for paper in papers:
+        keep, score, reason = paper_relevance(paper, query)
+        if not keep:
+            continue
+        paper["relevance_score"] = score
+        paper["relevance_reason"] = reason
+        relevant.append(paper)
+    return relevant, len(papers) - len(relevant)
+
+
 def paper_fingerprint(work: dict) -> str:
     """Identify duplicate metadata records even when repositories mint two DOIs."""
     title = _fingerprint_text(work.get("title") or work.get("display_name") or "")
@@ -360,6 +482,17 @@ def _pdf_url(work: dict) -> str:
         if url.startswith(("http://", "https://")):
             return url
     return ""
+
+
+def _openalex_abstract(work: dict) -> str:
+    """Rebuild OpenAlex's inverted-index abstract for relevance checks."""
+    inverted = work.get("abstract_inverted_index") or {}
+    positioned = []
+    for word, positions in inverted.items():
+        for position in positions or []:
+            if isinstance(position, int):
+                positioned.append((position, word))
+    return " ".join(word for _, word in sorted(positioned))
 
 
 def compact_work(work: dict) -> dict:
@@ -412,6 +545,7 @@ def compact_work(work: dict) -> dict:
             item.get("display_name") for item in (work.get("topics") or [])
             if item.get("display_name")
         ][:10],
+        "_relevance_abstract": _openalex_abstract(work)[:4000],
     }
     result["identity"] = paper_identity(result)
     result["author_count"] = len(authorships)
@@ -441,6 +575,7 @@ async def search_historical_works(
     cache_key = (
         query.casefold(), start.isoformat(), end.isoformat(), limit,
         bool(open_access_only), bool(os.environ.get("OPENALEX_API_KEY", "").strip()),
+        RELEVANCE_FILTER_VERSION,
     )
     cached = _search_cache.get(cache_key)
     if cached and time.monotonic() - cached[0] < SEARCH_CACHE_TTL_SECONDS:
@@ -470,6 +605,7 @@ async def search_historical_works(
     results = []
     estimated_total = 0
     unavailable_removed = 0
+    relevance_filtered = 0
     timeout = aiohttp.ClientTimeout(total=45)
     try:
         async with aiohttp.ClientSession(timeout=timeout, headers={"User-Agent": USER_AGENT}) as session:
@@ -480,6 +616,8 @@ async def search_historical_works(
                 page = [compact_work(item) for item in raw_page]
                 page, removed = await filter_unavailable_repository_records(session, page)
                 unavailable_removed += removed
+                page, removed = filter_relevant_papers(page, query)
+                relevance_filtered += removed
                 results.extend(item for item in page if item.get("identity") and not item.get("is_retracted"))
                 cursor = (payload.get("meta") or {}).get("next_cursor")
                 if not cursor or not raw_page:
@@ -493,12 +631,15 @@ async def search_historical_works(
         return result
     unique_results = deduplicate_papers(results)
     papers = unique_results[:limit]
+    for paper in papers:
+        paper.pop("_relevance_abstract", None)
     result = {
         "estimated_total": estimated_total, "returned": len(papers),
         "papers": papers, "metadata_source": "openalex",
         "duplicates_removed": len(results) - len(unique_results),
         "unavailable_removed": unavailable_removed,
-        "notice": "已默认排除 Zenodo 通用仓库记录。",
+        "relevance_filtered": relevance_filtered,
+        "notice": "已排除 Zenodo 通用仓库记录，并执行严格相关性筛选。",
     }
     _search_cache[cache_key] = (time.monotonic(), result)
     return result

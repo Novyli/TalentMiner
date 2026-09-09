@@ -134,9 +134,12 @@ function refreshPaperStartButton() {
 
 function renderPaperPreview(result) {
   state.discoveredPapers = result.papers || [];
+  const sourceLabel = result.metadata_source === 'crossref' ? 'Crossref' : 'OpenAlex';
   document.getElementById('paper-preview-panel').style.display = 'block';
   document.getElementById('paper-preview-summary').textContent =
-    `预览 ${result.returned || 0} 篇（约命中 ${result.estimated_total || 0} 篇）` +
+    `${sourceLabel} · 严格筛选后预览 ${result.returned || 0} 篇` +
+    `（数据源初始约命中 ${result.estimated_total || 0} 篇）` +
+    (result.relevance_filtered ? ` · 已过滤低相关论文 ${result.relevance_filtered} 篇` : '') +
     (result.duplicates_removed ? ` · 已自动去重 ${result.duplicates_removed} 条` : '') +
     (result.unavailable_removed ? ` · 已过滤失效论文 ${result.unavailable_removed} 条` : '') +
     (result.notice ? ` · ${result.notice}` : '');
@@ -147,7 +150,10 @@ function renderPaperPreview(result) {
       `<input type="checkbox" class="paper-select" data-index="${index}" checked>` +
       `<span class="paper-preview-body"><strong>${escapeHTML(paper.title || '未命名论文')}</strong>` +
       `<span>${escapeHTML(paper.publication_date || '日期未知')} · ${escapeHTML(paper.venue || paper.type || '')}` +
-      ` · ${paper.pdf_url ? '有开放PDF' : '元数据处理'}</span>` +
+      ` · ${paper.pdf_url ? '有开放PDF' : '元数据处理'}` +
+      (paper.relevance_score ? ` · 相关性 ${paper.relevance_score}` : '') +
+      `</span>` +
+      (paper.relevance_reason ? `<span>${escapeHTML(paper.relevance_reason)}</span>` : '') +
       `<span>${escapeHTML(authors + suffix)}</span></span></label>`;
   }).join('') || '<div class="history-empty">没有找到符合条件的论文</div>';
   document.querySelectorAll('.paper-select').forEach(input => input.addEventListener('change', refreshPaperStartButton));
