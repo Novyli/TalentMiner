@@ -14,7 +14,7 @@ import aiohttp
 
 OPENALEX_WORKS_URL = "https://api.openalex.org/works"
 CROSSREF_WORKS_URL = "https://api.crossref.org/works"
-USER_AGENT = "TalentMiner/1.1 (historical paper discovery)"
+USER_AGENT = "GQI-Talent-Radar/1.1 (historical paper discovery)"
 OPENALEX_MIN_REQUEST_INTERVAL = 0.4
 OPENALEX_MAX_RETRIES = 5
 SEARCH_CACHE_TTL_SECONDS = 600

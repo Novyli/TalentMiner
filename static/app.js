@@ -1,4 +1,4 @@
-window.addEventListener("error", function(e) { console.error("TalentMiner error:", e.message, e.filename, e.lineno); });
+window.addEventListener("error", function(e) { console.error("GQI Talent Radar error:", e.message, e.filename, e.lineno); });
 const API = '';
 const state = {
   authors: [],
@@ -1455,7 +1455,7 @@ document.getElementById('graph-search-type').addEventListener('change', e => {
   if (state.graphSearch.query) runGraphSearch();
 });
 
-console.log('TalentMiner ready');
+console.log('GQI Talent Radar ready');
 
 document.getElementById('download-csv-btn').addEventListener('click', async () => {
   if (!state.profiles || state.profiles.length === 0) {

@@ -13,6 +13,8 @@ hidden_imports = webview_hidden + collect_submodules("uvicorn") + [
     "multipart",
     "networkx",
 ]
+mac_icon = str(root / "assets" / "gqi-talent-radar.icns")
+windows_icon = str(root / "assets" / "gqi-talent-radar.ico")
 
 a = Analysis(
     [str(root / "desktop.py")],
@@ -34,7 +36,8 @@ if sys.platform == "darwin":
         a.scripts,
         [],
         exclude_binaries=True,
-        name="TalentMiner",
+        name="GQI Talent Radar",
+        icon=mac_icon,
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
@@ -51,15 +54,16 @@ if sys.platform == "darwin":
         a.datas,
         strip=False,
         upx=False,
-        name="TalentMiner",
+        name="GQI Talent Radar",
     )
     app = BUNDLE(
         coll,
-        name="TalentMiner.app",
-        bundle_identifier="com.quantumchina.talentminer",
+        name="GQI Talent Radar.app",
+        icon=mac_icon,
+        bundle_identifier="com.gqi.talentradar",
         info_plist={
-            "CFBundleDisplayName": "TalentMiner",
-            "CFBundleName": "TalentMiner",
+            "CFBundleDisplayName": "GQI Talent Radar",
+            "CFBundleName": "GQI Talent Radar",
             "CFBundleShortVersionString": "1.0.0",
             "NSHighResolutionCapable": True,
         },
@@ -71,7 +75,8 @@ else:
         a.binaries,
         a.datas,
         [],
-        name="TalentMiner",
+        name="GQITalentRadar",
+        icon=windows_icon,
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,

@@ -1,4 +1,4 @@
-"""TalentMiner: Academic author contact and relationship network builder."""
+"""GQI Talent Radar: global quantum talent discovery and mapping."""
 
 import asyncio
 import csv
@@ -48,7 +48,7 @@ from storage import (
     get_expanded_profiles, get_expansion_targets,
 )
 
-app = FastAPI(title="TalentMiner")
+app = FastAPI(title="GQI Talent Radar")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -215,7 +215,7 @@ async def lookup_openalex_work(doi: str = "", title: str = "") -> dict:
     """Resolve a paper first so its authorship IDs can anchor identity."""
     import aiohttp
     headers = {
-        "User-Agent": "TalentMiner/1.0 (academic metadata lookup)",
+        "User-Agent": "GQI-Talent-Radar/1.0 (academic metadata lookup)",
         "Accept": "application/json",
     }
     try:
@@ -1056,7 +1056,7 @@ async def resume_batch_jobs():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "TalentMiner"}
+    return {"status": "ok", "service": "GQI Talent Radar"}
 
 
 @app.post("/api/paper-search/preview")

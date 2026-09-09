@@ -1,4 +1,4 @@
-"""SQLite persistence layer for TalentMiner crawl results."""
+"""SQLite persistence layer for GQI Talent Radar crawl results."""
 
 import json
 import os

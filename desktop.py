@@ -1,4 +1,4 @@
-"""Cross-platform desktop launcher for the packaged TalentMiner app."""
+"""Cross-platform desktop launcher for the packaged GQI Talent Radar app."""
 
 from __future__ import annotations
 
@@ -12,7 +12,9 @@ import urllib.request
 from pathlib import Path
 
 
-APP_NAME = "TalentMiner"
+APP_NAME = "GQI Talent Radar"
+# Keep the legacy folder name so upgrades retain every task and contact.
+APP_DATA_DIR_NAME = "TalentMiner"
 
 
 def app_data_dir() -> Path:
@@ -23,7 +25,7 @@ def app_data_dir() -> Path:
         root = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
     else:
         root = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
-    path = root / APP_NAME
+    path = root / APP_DATA_DIR_NAME
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -62,7 +64,7 @@ def wait_until_ready(url: str, timeout: float = 20.0) -> None:
         except Exception as exc:  # server is still starting
             last_error = exc
         time.sleep(0.1)
-    raise RuntimeError(f"TalentMiner 后端启动超时：{last_error}")
+    raise RuntimeError(f"GQI Talent Radar 后端启动超时：{last_error}")
 
 
 def main() -> None:
@@ -83,7 +85,7 @@ def main() -> None:
     )
     server = uvicorn.Server(config)
     server.install_signal_handlers = lambda: None
-    server_thread = threading.Thread(target=server.run, name="talentminer-server", daemon=True)
+    server_thread = threading.Thread(target=server.run, name="gqi-talent-radar-server", daemon=True)
     server_thread.start()
     wait_until_ready(url)
 

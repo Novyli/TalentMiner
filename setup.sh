@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "=== TalentMiner 安装 ==="
+echo "=== GQI Talent Radar 安装 ==="
 if ! command -v python3 &> /dev/null; then
     echo "错误: 需要 Python 3.9+"
     exit 1

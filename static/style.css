@@ -10,6 +10,9 @@
 html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; line-height: 1.5; overflow: hidden; }
 .app-container { display: flex; flex-direction: column; height: 100vh; }
 .app-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; background: var(--panel-bg); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.header-left { display: flex; align-items: center; gap: 10px; }
+.brand-logo { width: 38px; height: 38px; object-fit: contain; flex: 0 0 auto; }
+.brand-copy { display: flex; align-items: baseline; }
 .header-left h1 { font-size: 18px; font-weight: 700; color: var(--text-bright); }
 .subtitle { font-size: 11px; color: var(--text-secondary); margin-left: 8px; }
 .status-idle { font-size: 11px; padding: 3px 10px; border-radius: 10px; background: #1a2e1a; color: var(--green); }

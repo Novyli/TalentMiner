@@ -1,6 +1,7 @@
-# TalentMiner — 学术人物联系方式挖掘
+# GQI Talent Radar — 全球量子人才雷达
 
-输入论文/文本 → 提取作者 → 跨源搜索联系方式 → 生成关系网络 → 导出 CSV。
+GQI（Global Quantum Intelligence）旗下 AI 全球人才雷达系统：输入论文或主题，
+自动发现量子科技人才、核验公开联系方式、生成关系网络并导出人才地图。
 
 ## 安装
 ```bash
@@ -15,11 +16,13 @@ bash start.sh
 
 ## 桌面安装包
 
-桌面版会把 Python、FastAPI 和运行依赖全部打进应用。用户双击图标即可运行，
+桌面版会把 Python、FastAPI 和运行依赖全部打进应用。用户双击 GQI 图标即可运行，
 无需安装 Python 或打开终端。数据库和上传文件保存在每位用户自己的应用数据目录：
 
 - macOS：`~/Library/Application Support/TalentMiner/`
 - Windows：`%LOCALAPPDATA%\TalentMiner\`
+
+为保证从 TalentMiner 升级后历史任务和联系人不丢失，内部数据目录继续沿用旧名称。
 
 开发机首次安装打包依赖：
 
@@ -33,7 +36,7 @@ macOS 构建：
 bash packaging/build_macos.sh
 ```
 
-产物位于 `release/TalentMiner-macOS-<架构>.dmg`。
+产物位于 `release/GQI-Talent-Radar-macOS-<架构>.dmg`。
 
 Windows 构建需要 Windows 环境以及 Inno Setup：
 
@@ -41,7 +44,7 @@ Windows 构建需要 Windows 环境以及 Inno Setup：
 powershell -ExecutionPolicy Bypass -File packaging/build_windows.ps1
 ```
 
-产物位于 `release/TalentMiner-Windows-x64-Setup.exe`。仓库中的
+产物位于 `release/GQI-Talent-Radar-Windows-x64-Setup.exe`。仓库中的
 `.github/workflows/build-desktop.yml` 可以在推送 `v*` 标签或手动触发时，
 分别在 macOS 与 Windows 环境生成两个安装包。
 
@@ -113,7 +116,7 @@ Apple Developer ID 签名与公证。Windows 公开分发前同样建议配置�
 
 ## 文件结构
 ```
-TalentMiner/
+GQI-Talent-Radar/
 ├── app.py              # FastAPI 后端
 ├── crawler.py          # 爬虫引擎
 ├── pdf_parser.py       # PDF 解析 + 作者提取

@@ -1,7 +1,7 @@
-#define MyAppName "TalentMiner"
+#define MyAppName "GQI Talent Radar"
 #define MyAppVersion "1.0.0"
-#define MyAppPublisher "QuantumChina"
-#define MyAppExeName "TalentMiner.exe"
+#define MyAppPublisher "GQI - Global Quantum Intelligence"
+#define MyAppExeName "GQITalentRadar.exe"
 
 [Setup]
 AppId={{A2B95C93-3270-4AD5-BFB2-EA9712025A66}
@@ -12,7 +12,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\release
-OutputBaseFilename=TalentMiner-Windows-x64-Setup
+OutputBaseFilename=GQI-Talent-Radar-Windows-x64-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -20,12 +20,13 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\{#MyAppExeName}
+SetupIconFile=..\assets\gqi-talent-radar.ico
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "..\dist\TalentMiner.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\GQITalentRadar.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

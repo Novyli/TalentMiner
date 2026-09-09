@@ -15,9 +15,9 @@ jobs:
       matrix:
         include:
           - runner: macos-15-intel
-            artifact: TalentMiner-macOS-Intel
+            artifact: GQI-Talent-Radar-macOS-Intel
           - runner: macos-14
-            artifact: TalentMiner-macOS-Apple-Silicon
+            artifact: GQI-Talent-Radar-macOS-Apple-Silicon
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +46,7 @@ jobs:
       - run: powershell -ExecutionPolicy Bypass -File packaging/build_windows.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: TalentMiner-Windows-x64
+          name: GQI-Talent-Radar-Windows-x64
           path: release/*.exe
           if-no-files-found: error
 
@@ -75,6 +75,6 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
           else
             gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
-              --title "TalentMiner $GITHUB_REF_NAME" \
+              --title "GQI Talent Radar $GITHUB_REF_NAME" \
               --generate-notes "${prerelease[@]}"
           fi
